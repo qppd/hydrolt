@@ -52,7 +52,7 @@ Copy-Item .env.example .env.local
 |---|---|
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anon (public) key |
-| `NEXT_PUBLIC_DEVICE_ID` | UUID of the registered ESP32 in `devices` |
+| `NEXT_PUBLIC_DEVICE_ID` | Fallback UUID of the registered ESP32 in `devices` (used only before a user connects a device) |
 | `NEXT_PUBLIC_DEMO_MODE` | `true` forces simulated data even if Supabase is set |
 
 If Supabase variables are missing, the app automatically falls back to **demo mode**
@@ -63,21 +63,45 @@ If Supabase variables are missing, the app automatically falls back to **demo mo
 1. Create a project at <https://supabase.com>.
 2. Run the SQL in [database-schema.md](database-schema.md) in the SQL editor.
 3. Enable **Email** auth in Authentication → Providers.
-4. Create a user, then insert its profile row:
+
+4. **Sign-up flow:** visitors create their own account from the app's **Sign up** tab
+   (Supabase `auth.signUp`). By default a new user lands with no profile row, so their
+   role defaults to `viewer` on first insert. To make someone an admin, insert their
+   profile row after they sign up (or pre-create it):
 
 ```sql
 insert into public.profiles (id, full_name, role)
 values ('<auth-user-uuid>', 'Admin', 'owner');
 ```
 
-5. Register the device:
+5. Register the device, then **copy the returned `id`** — that UUID is the device's
+   unique ID, shown on the device label and on the serial monitor at boot:
 
 ```sql
 insert into public.devices (name, device_key_hash, status)
-values ('Greenhouse Controller', encode(digest('change-me-device-key', 'sha256'), 'hex'), 'offline');
+values ('Greenhouse Controller', encode(digest('change-me-device-key', 'sha256'), 'hex'), 'offline')
+returning id;
 ```
 
 6. Put the project URL + anon key in `.env.local` and restart `npm run dev`.
+
+### 3.3 Signing in and connecting a device
+
+The app gates all monitoring/control pages behind authentication and a linked device:
+
+1. **Sign up / Sign in** — visitors create an account (Sign up tab) or sign in
+   (Sign in tab) at `/login`.
+2. **Connect** — after authenticating, the user is sent to `/connect` to enter the
+   controller's **unique device ID**. The ID is validated against the `devices` table
+   (RLS-protected) and, once accepted, is stored in the browser (`localStorage`) so
+   every page reads telemetry for that machine.
+3. **Dashboard** — with a device linked, `/`, `/history`, `/controls` and `/alerts`
+   all scope their queries to the connected device.
+
+`NEXT_PUBLIC_DEVICE_ID` is only a **fallback** used when no device has been connected
+yet (e.g. first load, or a shared kiosk). In production each user links their own
+device on `/connect`. If a signed-in user has no device linked, the app automatically
+routes them to `/connect`.
 
 ### 3.3 Production build
 

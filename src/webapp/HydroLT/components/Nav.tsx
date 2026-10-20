@@ -2,6 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useAuth } from "@/hooks/useAuth";
+import { usePairedDevice } from "@/lib/device";
 import { DEMO_MODE } from "@/lib/supabase";
 
 const LINKS = [
@@ -9,11 +11,15 @@ const LINKS = [
   { href: "/history", label: "History" },
   { href: "/controls", label: "Controls" },
   { href: "/alerts", label: "Alerts" },
-  { href: "/login", label: "Sign in" },
+  { href: "/connect", label: "Connect" },
 ];
 
 export default function Nav() {
   const pathname = usePathname();
+  const { user, signOut } = useAuth();
+  const { deviceId } = usePairedDevice();
+  const authed = DEMO_MODE || !!user;
+
   return (
     <header className="nav">
       <div className="nav-inner">
@@ -36,8 +42,24 @@ export default function Nav() {
         </nav>
 
         <span className={`mode-chip ${DEMO_MODE ? "warn" : ""}`}>
-          {DEMO_MODE ? "DEMO DATA" : "LIVE"}
+          {DEMO_MODE ? "DEMO DATA" : deviceId ? "DEVICE LINKED" : "NO DEVICE"}
         </span>
+
+        {authed ? (
+          <span className="mode-chip" title={user?.email ?? undefined}>
+            {user?.email ?? "demo user"}
+          </span>
+        ) : (
+          <Link href="/login" className="mode-chip">
+            Sign in
+          </Link>
+        )}
+
+        {authed ? (
+          <button className="mode-chip" onClick={() => signOut()} title="Sign out">
+            Sign out
+          </button>
+        ) : null}
       </div>
     </header>
   );

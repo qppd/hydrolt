@@ -110,6 +110,10 @@ The dashboard runs in **demo mode with simulated data** when no Supabase environ
 are set, so you can preview it immediately. To connect a real backend, copy `.env.example` to
 `.env.local` and fill in your Supabase project values — see [docs/setup.md](docs/setup.md).
 
+With a real backend, the first-run flow is: **sign up** (or sign in) → **connect** to your
+controller by entering its **unique device ID** → dashboard. The device ID is validated against
+the `devices` table and remembered in the browser.
+
 ```bash
 npm run build     # production build
 npm start         # serve the production build

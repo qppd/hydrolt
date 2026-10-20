@@ -1,5 +1,6 @@
 import { DEMO_DEVICE_ID, demo, seedHistory } from "./demo";
-import { DEMO_MODE, DEVICE_ID, supabase } from "./supabase";
+import { activeDeviceId } from "./device";
+import { DEMO_MODE, supabase } from "./supabase";
 import type {
   Alert,
   CommandStatus,
@@ -22,7 +23,10 @@ import type {
  * only inserts `control_commands` rows that are authorized by RLS.
  */
 
-const deviceId = DEMO_MODE ? DEMO_DEVICE_ID : DEVICE_ID;
+/** Device the web app is connected to (paired by the user on /connect). */
+function deviceId(): string {
+  return activeDeviceId();
+}
 
 function fmt(d: Date) {
   return d.toISOString();
@@ -44,7 +48,7 @@ export async function getDevice(): Promise<Device> {
   const { data, error } = await supabase()!
     .from("devices")
     .select("id,name,location,status,firmware_version,last_seen_at")
-    .eq("id", deviceId)
+    .eq("id", deviceId())
     .single();
   if (error || !data) throw new Error(error?.message ?? "device not found");
   return data as Device;
@@ -57,13 +61,13 @@ export async function getLatestReading(): Promise<SensorReading> {
   const { data, error } = await supabase()!
     .from("sensor_readings")
     .select("*")
-    .eq("device_id", deviceId)
+    .eq("device_id", deviceId())
     .order("recorded_at", { ascending: false })
     .limit(1);
   if (error) throw new Error(error.message);
   if (!data || data.length === 0) {
     return {
-      device_id: deviceId,
+      device_id: deviceId(),
       recorded_at: new Date().toISOString(),
       ph: null,
       ec: null,
@@ -100,7 +104,7 @@ export async function getReadings(range: RangeKey = "24h"): Promise<SensorReadin
   const { data, error } = await supabase()!
     .from("sensor_readings")
     .select("*")
-    .eq("device_id", deviceId)
+    .eq("device_id", deviceId())
     .gte("recorded_at", since)
     .order("recorded_at", { ascending: true })
     .limit(5000);
@@ -118,12 +122,12 @@ export async function getDeviceState(): Promise<DeviceState> {
   const { data, error } = await supabase()!
     .from("device_states")
     .select("*")
-    .eq("device_id", deviceId)
+    .eq("device_id", deviceId())
     .maybeSingle();
   if (error) throw new Error(error.message);
   if (data) return data as DeviceState;
   return {
-    device_id: deviceId,
+    device_id: deviceId(),
     pump_on: false,
     fan_on: false,
     misting_on: false,
@@ -135,7 +139,7 @@ export async function getDeviceState(): Promise<DeviceState> {
 /* --------------------------------------------------------------- settings */
 
 /** Fallback limits used when a device has no saved settings row yet. */
-export function defaultSettings(deviceIdValue: string = deviceId): ControlSettings {
+export function defaultSettings(deviceIdValue: string = deviceId()): ControlSettings {
   return {
     device_id: deviceIdValue,
     ph_min: 5.5,
@@ -166,7 +170,7 @@ export async function getSettings(): Promise<ControlSettings> {
   const { data, error } = await supabase()!
     .from("control_settings")
     .select("*")
-    .eq("device_id", deviceId)
+    .eq("device_id", deviceId())
     .maybeSingle();
   if (error) throw new Error(error.message);
   return (data as ControlSettings) ?? defaultSettings();
@@ -179,7 +183,7 @@ export async function saveSettings(patch: Partial<ControlSettings>): Promise<Con
   }
   const { data, error } = await supabase()!
     .from("control_settings")
-    .upsert({ ...patch, device_id: deviceId, updated_at: new Date().toISOString() })
+    .upsert({ ...patch, device_id: deviceId(), updated_at: new Date().toISOString() })
     .select()
     .single();
   if (error) throw new Error(error.message);
@@ -198,7 +202,7 @@ export async function getAlerts(onlyOpen = false): Promise<Alert[]> {
   let q = supabase()!
     .from("alerts")
     .select("*")
-    .eq("device_id", deviceId)
+    .eq("device_id", deviceId())
     .order("created_at", { ascending: false })
     .limit(200);
   if (onlyOpen) q = q.is("resolved_at", null);
@@ -226,7 +230,7 @@ export async function getEvents(limit = 50): Promise<DeviceEvent[]> {
   const { data, error } = await supabase()!
     .from("device_events")
     .select("*")
-    .eq("device_id", deviceId)
+    .eq("device_id", deviceId())
     .order("created_at", { ascending: false })
     .limit(limit);
   if (error) throw new Error(error.message);
@@ -254,7 +258,7 @@ export async function sendCommand(
   const { data, error } = await supabase()!
     .from("control_commands")
     .insert({
-      device_id: deviceId,
+      device_id: deviceId(),
       command_type: type,
       payload,
       status: "pending",

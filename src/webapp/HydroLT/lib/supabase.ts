@@ -1,4 +1,4 @@
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient, type User } from "@supabase/supabase-js";
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
@@ -28,6 +28,27 @@ export async function signIn(email: string, password: string) {
   if (!sb) return { error: new Error("Demo mode — authentication is disabled.") };
   const { error } = await sb.auth.signInWithPassword({ email, password });
   return { error };
+}
+
+/**
+ * Create a new account. Returns `needsConfirm` when the project requires
+ * email confirmation before the first sign-in.
+ */
+export async function signUp(email: string, password: string) {
+  const sb = supabase();
+  if (!sb)
+    return { error: new Error("Demo mode — authentication is disabled."), needsConfirm: false };
+  const { data, error } = await sb.auth.signUp({ email, password });
+  const needsConfirm = !error && !data.session;
+  return { error, needsConfirm };
+}
+
+/** Currently signed-in user, or null. */
+export async function getCurrentUser(): Promise<User | null> {
+  const sb = supabase();
+  if (!sb) return null;
+  const { data } = await sb.auth.getUser();
+  return data.user ?? null;
 }
 
 export async function signOut() {
