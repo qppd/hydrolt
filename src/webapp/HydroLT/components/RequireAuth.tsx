@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/hooks/useAuth";
 import { usePairedDevice } from "@/lib/device";
-import { DEMO_MODE } from "@/lib/supabase";
+import { DEMO_MODE } from "@/lib/firebase";
 
 /**
  * Route guard wrapping every page under app/(app).

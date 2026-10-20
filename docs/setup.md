@@ -12,8 +12,7 @@ How to build, configure, and run both halves of the project.
 | npm | ships with Node |
 | Arduino IDE | 2.x (or PlatformIO) |
 | ESP32 board package | `esp32 by Espressif Systems` |
-| MQTT broker | Mosquitto (local) or a hosted broker |
-| Supabase project | for auth + PostgreSQL (optional — app runs in demo mode without it) |
+| Firebase project | Realtime Database + Email/Password auth (optional — app runs in demo mode without it) |
 
 ---
 
@@ -50,40 +49,44 @@ Copy-Item .env.example .env.local
 
 | Variable | Purpose |
 |---|---|
-| `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anon (public) key |
-| `NEXT_PUBLIC_DEVICE_ID` | Fallback UUID of the registered ESP32 in `devices` (used only before a user connects a device) |
-| `NEXT_PUBLIC_DEMO_MODE` | `true` forces simulated data even if Supabase is set |
+| `NEXT_PUBLIC_FB_API_KEY` | Firebase project web API key |
+| `NEXT_PUBLIC_FB_AUTH_DOMAIN` | Firebase auth domain (`<project>.firebaseapp.com`) |
+| `NEXT_PUBLIC_FB_DATABASE_URL` | Realtime Database URL (`<project>-default-rtdb.firebaseio.com`) |
+| `NEXT_PUBLIC_FB_PROJECT_ID` | Firebase project ID |
+| `NEXT_PUBLIC_DEVICE_ID` | Fallback device ID of the registered ESP32 (used only before a user connects a device) |
+| `NEXT_PUBLIC_DEMO_MODE` | `true` forces simulated data even if Firebase is set |
 
-If Supabase variables are missing, the app automatically falls back to **demo mode**
+If the Firebase variables are missing, the app automatically falls back to **demo mode**
 (simulated live readings) so the UI can be reviewed before the backend exists.
 
-### 3.2 Connecting Supabase
+### 3.2 Connecting Firebase
 
-1. Create a project at <https://supabase.com>.
-2. Run the SQL in [database-schema.md](database-schema.md) in the SQL editor.
-3. Enable **Email** auth in Authentication → Providers.
+1. Create a project at <https://console.firebase.google.com>.
+2. **Realtime Database** → Create database (start in **test mode**, then paste the
+   rules from [database-schema.md](database-schema.md)).
+3. **Authentication → Sign-in method** → enable **Email/Password**.
+4. **Project settings → General** → copy the web app config into `.env.local`
+   (`NEXT_PUBLIC_FB_*`).
+5. **Authentication → Users → Add user** — create the account that the web app
+   will sign in with. All accounts start as `viewer` (the app writes
+   `users/{uid}` with `role: "viewer"` on sign-up); promote an account to
+   `owner` in the database by editing its `role` field.
 
-4. **Sign-up flow:** visitors create their own account from the app's **Sign up** tab
-   (Supabase `auth.signUp`). By default a new user lands with no profile row, so their
-   role defaults to `viewer` on first insert. To make someone an admin, insert their
-   profile row after they sign up (or pre-create it):
+6. Register the device in the database. The device ID is whatever you set as
+   `DEVICE_ID` in the firmware (e.g. `hydro-01`) — it is shown on the serial
+   monitor at boot and is what users type on the Connect page:
 
-```sql
-insert into public.profiles (id, full_name, role)
-values ('<auth-user-uuid>', 'Admin', 'owner');
+```
+devices/
+└── hydro-01/
+    ├── info/
+    │   ├── name: "Greenhouse Controller"
+    │   ├── location: "Greenhouse 4x5m"
+    │   └── firmware_version: "0.1.0"
+    └── status: "offline"
 ```
 
-5. Register the device, then **copy the returned `id`** — that UUID is the device's
-   unique ID, shown on the device label and on the serial monitor at boot:
-
-```sql
-insert into public.devices (name, device_key_hash, status)
-values ('Greenhouse Controller', encode(digest('change-me-device-key', 'sha256'), 'hex'), 'offline')
-returning id;
-```
-
-6. Put the project URL + anon key in `.env.local` and restart `npm run dev`.
+7. Restart `npm run dev`.
 
 ### 3.3 Signing in and connecting a device
 
@@ -92,9 +95,9 @@ The app gates all monitoring/control pages behind authentication and a linked de
 1. **Sign up / Sign in** — visitors create an account (Sign up tab) or sign in
    (Sign in tab) at `/login`.
 2. **Connect** — after authenticating, the user is sent to `/connect` to enter the
-   controller's **unique device ID**. The ID is validated against the `devices` table
-   (RLS-protected) and, once accepted, is stored in the browser (`localStorage`) so
-   every page reads telemetry for that machine.
+   controller's **unique device ID**. The ID is validated against the
+   `devices/{id}` node (security-rules protected) and, once accepted, is stored in
+   the browser (`localStorage`) so every page reads telemetry for that machine.
 3. **Dashboard** — with a device linked, `/`, `/history`, `/controls` and `/alerts`
    all scope their queries to the connected device.
 
@@ -120,7 +123,7 @@ File: [`src/esp/HydroLT/HydroLT.ino`](../src/esp/HydroLT/HydroLT.ino)
 
 | Library | Author | Install via Library Manager |
 |---|---|---|
-| PubSubClient | Nick O'Leary | ✔ |
+| Firebase Arduino Client Library for ESP8266 and ESP32 | Mobizt | ✔ **v4.x** (Firebase Auth + Realtime Database) |
 | DHT sensor library | Adafruit | ✔ |
 | Adafruit Unified Sensor | Adafruit | ✔ |
 | ArduinoJson | Benoit Blanchon | ✔ **v7.x required** (`JsonDocument` API) |
@@ -150,10 +153,15 @@ Edit the top of `HydroLT.ino`:
 ```cpp
 const char* WIFI_SSID = "YOUR_SSID";
 const char* WIFI_PASS = "YOUR_PASSWORD";
-const char* MQTT_HOST = "192.168.1.10";   // broker IP
-const uint16_t MQTT_PORT = 1883;
-const char* DEVICE_ID = "hydro-01";
+const char* FB_API_KEY  = "YOUR_WEB_API_KEY";       // Firebase project settings
+const char* FB_DB_URL   = "https://<project>-default-rtdb.firebaseio.com";
+const char* FB_EMAIL    = "device-hydro-01@your-project.example.com";
+const char* FB_PASSWORD = "YOUR_DEVICE_PASSWORD";   // dedicated device account
+const char* DEVICE_ID   = "hydro-01";               // unique machine ID for the web app
 ```
+
+The device signs into Firebase with its **own email/password account** (create it in
+Authentication → Users). Never put a database secret in the firmware.
 
 Then set the pin map to match the actual wiring (see §6) and the default control
 thresholds (`DEFAULT_PH_MIN`, `DEFAULT_TEMP_SETPOINT`, `DEFAULT_MIN_FLOW`, ...).
@@ -177,8 +185,13 @@ must be wired to the N, P and K peristaltic pumps; if they are not, keep
 2. Select the correct COM port.
 3. Compile + upload; open Serial Monitor at **115200 baud**.
 
-Verified build (arduino-cli, `esp32:esp32:esp32`, warnings=all): **948,384 bytes (72 %) flash ·
-47,808 bytes (14 %) RAM · 0 warnings from the sketch.**
+Verified build (arduino-cli, `esp32:esp32:esp32`, warnings=all): **1,260,853 bytes (96 %) flash ·
+53,688 bytes (16 %) RAM · 0 warnings from the sketch.**
+
+> **Flash headroom:** the Firebase SSL client is much larger than the previous MQTT
+> stack. The sketch fits a stock 4 MB ESP32 Dev Module, but leaves little margin for
+> future changes — if you overflow after adding features, use a module with 8 MB flash
+> or trim optional features.
 
 ### 4.4 Behavior notes
 
@@ -202,16 +215,23 @@ Verified build (arduino-cli, `esp32:esp32:esp32`, warnings=all): **948,384 bytes
 
 ---
 
-## 5. MQTT topics
+## 5. Realtime Database layout
 
-| Topic | Direction | Payload |
+Paths are relative to the database root. `{deviceId}` is the `DEVICE_ID` constant
+set in the firmware.
+
+| Path | Direction | Payload |
 |---|---|---|
-| `hydro/{deviceId}/telemetry` | device → broker | `{"ts":..,"ph":..,"ec":..,"temp":..,"hum":..,"npk_n":..,"npk_p":..,"npk_k":..,"flow":..,"flags":{"ph":1,"ec":1,"climate":1,"flow":1,"npk":1}}` |
-| `hydro/{deviceId}/state` | device → broker | `{"pump":0,"fan":0,"misting":0,"doseA":0,"doseB":0,"doseN":0,"doseP":0,"doseK":0,"npk_ok":1,"mode":"auto"}` (retained) |
-| `hydro/{deviceId}/alert` | device → broker | `{"severity":"warning","type":"low_flow","msg":"..."}` |
-| `hydro/{deviceId}/status` | device → broker | `online` / `offline` (LWT, retained) |
-| `hydro/{deviceId}/cmd` | app → broker | `{"cmd":"pump","value":true,"id":"<uuid>"}` · `{"cmd":"dose","value":"N","duration_ms":3000,"id":"<uuid>"}` (A/B = pH channels, N/P/K = NPK channels) |
-| `hydro/{deviceId}/settings` | app → broker | `{"ph_min":5.5,"ph_max":6.5,...,"npk_n_min":80,"npk_n_max":160,"npk_dosing_max_runtime_s":5,"npk_dose_cooldown_s":300,"npk_dosing_enabled":1}` |
+| `devices/{deviceId}/telemetry` | device → DB (overwrite) | `{"ts":<epoch>,"device_ms":..,"ph":..,"ec":..,"temp":..,"hum":..,"npk_n":..,"npk_p":..,"npk_k":..,"flow":..,"flags":{"ph":true,"ec":true,"climate":true,"flow":true,"npk":true}}` |
+| `devices/{deviceId}/history/{pushKey}` | device → DB (append) | same as telemetry; one node per archived reading, pruned on-device after 30 days |
+| `devices/{deviceId}/state` | device → DB (overwrite) | `{"pump":0,"fan":0,"misting":0,"doseA":0,"doseB":0,"doseN":0,"doseP":0,"doseK":0,"npk_ok":1,"mode":"auto","doseState":"idle","updated_at":<epoch>}` |
+| `devices/{deviceId}/status` | device → DB | `"online"` / `"offline"` |
+| `devices/{deviceId}/settings` | device → DB (mirror) | `{"ph_min":5.5,"ph_max":6.5,...,"npk_n_min":80,"npk_n_max":160,"npk_dosing_max_runtime_s":5,"npk_dose_cooldown_s":300,"npk_dosing_enabled":1}` |
+| `devices/{deviceId}/commands/{pushKey}` | app → device (append) | `{"cmd":"pump","value":true,"id":"<key>"}` · `{"cmd":"dose","value":"N","duration_ms":3000,"id":"<key>"}` (A/B = pH channels, N/P/K = NPK channels). The device streams this node, executes, then deletes each processed key. |
+| `devices/{deviceId}/acks/{pushKey}` | device → DB (append) | `{"cmd_id":"<key>","status":"ok"\|"rejected","note":"...","ts":<epoch>}` |
+| `devices/{deviceId}/alerts/{pushKey}` | device → DB (append) | `{"severity":"warning","type":"low_flow","msg":"...","ts":<epoch>,"resolved":false}` |
+| `devices/{deviceId}/events/{pushKey}` | device → DB (append) | `{"event":"boot","details":"reset_reason=3","ts":<epoch>}` |
+| `users/{uid}` | app → DB | `{"email":"...","role":"viewer"}` — written by the app at sign-up |
 
 The `npk_n`, `npk_p` and `npk_k` telemetry fields are **omitted** whenever the probe
 has not produced a valid frame, and `flags.npk` reports the probe health — the
@@ -219,7 +239,12 @@ dashboard then shows "—" instead of stale numbers. `npk_dosing_enabled` is the
 kill switch (1 = automatic NPK dosing armed).
 
 Command payloads are validated on-device; anything unrecognized or out of range is
-rejected and acknowledged as `failed`.
+rejected and acknowledged with `status: "rejected"`.
+
+**Billing note:** RTDB is billed per stored GB and per download. The firmware keeps
+only the latest telemetry/state nodes and prunes `history` on-device (30-day window,
+one archive node per minute). For a single greenhouse this stays in the free tier;
+if you raise `HISTORY_INTERVAL_MS` or `HISTORY_DAYS`, watch the usage report.
 
 ---
 

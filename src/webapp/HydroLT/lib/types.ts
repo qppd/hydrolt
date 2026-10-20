@@ -1,5 +1,5 @@
 /**
- * Shared domain types — mirror the Supabase schema in docs/database-schema.md.
+ * Shared domain types — mirror the RTDB layout in docs/database-schema.md.
  */
 
 export type Severity = "info" | "warning" | "critical";

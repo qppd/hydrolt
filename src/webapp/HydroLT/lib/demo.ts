@@ -7,7 +7,7 @@ import type {
 } from "./types";
 
 /**
- * Simulated device — used when Supabase is not configured (demo mode).
+ * Simulated device — used when Firebase is not configured (demo mode).
  *
  * The simulator mirrors the firmware's behavior closely enough for UI review:
  * pH/EC random-walk inside the configured bands, climate following a daily
@@ -154,7 +154,7 @@ class DemoDevice {
   events: DeviceEvent[] = [
     { id: "e1", device_id: DEMO_DEVICE_ID, event_type: "boot", created_at: new Date(Date.now() - 1000 * 60 * 60 * 26).toISOString(), details: { reset_reason: 3 } },
     { id: "e2", device_id: DEMO_DEVICE_ID, event_type: "watchdog", created_at: new Date(Date.now() - 1000 * 60 * 60 * 25.9).toISOString(), details: { recovered: true } },
-    { id: "e3", device_id: DEMO_DEVICE_ID, event_type: "mqtt_loss", created_at: new Date(Date.now() - 1000 * 60 * 190).toISOString(), details: { reconnects: 1 } },
+    { id: "e3", device_id: DEMO_DEVICE_ID, event_type: "db_loss", created_at: new Date(Date.now() - 1000 * 60 * 190).toISOString(), details: { reconnects: 1 } },
     { id: "e4", device_id: DEMO_DEVICE_ID, event_type: "sensor_fail", created_at: new Date(Date.now() - 1000 * 60 * 60 * 12).toISOString(), details: { sensor: "ec" } },
   ];
 

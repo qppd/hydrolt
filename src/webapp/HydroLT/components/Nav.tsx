@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/hooks/useAuth";
 import { usePairedDevice } from "@/lib/device";
-import { DEMO_MODE } from "@/lib/supabase";
+import { DEMO_MODE } from "@/lib/firebase";
 
 const LINKS = [
   { href: "/", label: "Dashboard" },

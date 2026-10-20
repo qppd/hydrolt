@@ -8,7 +8,7 @@
 [![Next.js](https://img.shields.io/badge/Next.js-15-black?logo=next.js&logoColor=white)](https://nextjs.org/)
 [![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)](https://react.dev/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![Supabase](https://img.shields.io/badge/Supabase-Postgres-3FCF8E?logo=supabase&logoColor=white)](https://supabase.com/)
+[![Firebase](https://img.shields.io/badge/Firebase-RTDB%20%2B%20Auth-FFCA28?logo=firebase&logoColor=black)](https://firebase.google.com/)
 [![ESP32](https://img.shields.io/badge/ESP32-Arduino%20Framework-000000?logo=espressif&logoColor=white)](https://www.espressif.com/)
 [![Arduino CLI](https://img.shields.io/badge/build-arduino--cli-blue)](https://arduino.github.io/arduino-cli/)
 
@@ -26,9 +26,9 @@ hybrid solar/grid power, and a web-based monitoring and management system.
 
 HydroLT monitors and automates a soilless vertical-farm grow environment end to end: an ESP32
 controller reads pH, EC, temperature, humidity, water flow and NPK from connected sensors, runs
-local fail-safe automation, and streams telemetry to a Supabase backend over MQTT. A Next.js web
-app provides a real-time dashboard, historical trending, remote controls and an alerts feed —
-usable from any browser, on desktop or mobile.
+local fail-safe automation, and streams telemetry to a Firebase Realtime Database
+backend. A Next.js web app provides a real-time dashboard, historical trending, remote
+controls and an alerts feed — usable from any browser, on desktop or mobile.
 
 Automation keeps running **without an internet connection** (FR-10); the cloud layer is for
 observability and remote override, not for keeping plants alive.
@@ -42,20 +42,20 @@ observability and remote override, not for keeping plants alive.
 - **NPK** (nitrogen / phosphorus / potassium) via a dedicated **RS485 Modbus RTU** probe — measured, never derived from pH/EC
 - **Air temperature & humidity** (DHT22) with exhaust-fan and misting control
 - **Water flow** (pulse sensor) with low-flow pump cutoff
-- Telemetry streamed over **MQTT** (`hydro/<device>/…`) with retained state and a Last-Will offline status
+- Telemetry streamed to **Firebase Realtime Database** (`devices/<device>/…`) with live state and device presence
 
 ### Automated dosing & control
 - **Closed-loop pH/EC dosing** — one channel at a time, hard burst caps, cooldowns
 - **Closed-loop NPK dosing** (FR-13) — bounded and interlocked; blocked whenever the probe, pH or EC is invalid, EC is above target, or the solution is not circulating
 - **Exhaust fan** (temperature) and **misting** (humidity) automation
 - **Irrigation pump** with flow-verified startup and fail-safe low-flow cutoff
-- **Manual override** from the web app via authenticated `control_commands`
+- **Manual override** from the web app via RTDB command queue (`devices/<device>/commands`)
 
 ### Safety & reliability
 - Invalid sensor readings **block dosing** — no uncontrolled nutrient/acid dosing
 - Non-blocking, `millis()`-based main loop; watchdog recovery on the main loop
 - Local automation continues with **no internet**; cloud is optional
-- Row-level security (RLS) in Supabase; **no secrets or credentials stored in any table**
+- Security rules on the Firebase Realtime Database; **no secrets or credentials stored in the database**
 
 ### Web application
 - Real-time **dashboard** with live stat cards and trend charts
@@ -63,7 +63,7 @@ observability and remote override, not for keeping plants alive.
 - **Controls** page for setpoints, NPK bands, kill switches and manual dose triggers
 - **Alerts** feed with device health and event history
 - **Demo mode** — runs with simulated data and no backend, so you can preview instantly
-- **Password auth** (Supabase) protecting the dashboard and device controls
+- **Password auth** (Firebase) protecting the dashboard and device controls
 
 ---
 
@@ -74,8 +74,8 @@ observability and remote override, not for keeping plants alive.
 |---|---|
 | Framework | [Next.js 15](https://nextjs.org/) (App Router) + [React 19](https://react.dev/) |
 | Language | [TypeScript 5.7](https://www.typescriptlang.org/) |
-| Backend / DB | [Supabase](https://supabase.com/) — Postgres, Auth, Row-Level Security |
-| Realtime | MQTT telemetry ingested to Supabase; polling hooks in the client |
+| Backend / DB | [Firebase](https://firebase.google.com/) — Realtime Database, Auth, security rules |
+| Realtime | RTDB live queries; polling hooks in the client |
 | Charts | Custom lightweight `LineChart` component |
 
 ### Controller firmware — `src/esp/HydroLT`
@@ -83,9 +83,9 @@ observability and remote override, not for keeping plants alive.
 |---|---|
 | Board | ESP32 Dev Module (Arduino-ESP32 core **3.3.11**) |
 | Framework | Arduino framework via `arduino-cli` / Arduino IDE |
-| Libraries | `PubSubClient` 2.8 (MQTT) · `DHT sensor library` + `Adafruit Unified Sensor` · `ArduinoJson` 7.4.3 |
+| Libraries | `Firebase Arduino Client` (Mobizt) · `DHT sensor library` + `Adafruit Unified Sensor` · `ArduinoJson` 7.4.3 |
 | Field bus | RS485 **Modbus RTU** master built into the sketch (no extra library) over UART2 via MAX485 |
-| Verified build | `esp32:esp32:esp32` — 948,384 B flash (72 %), 47,808 B RAM (14 %) |
+| Verified build | `esp32:esp32:esp32` — 1,260,853 B flash (96 %), 53,688 B RAM (16 %) |
 
 ---
 
@@ -94,7 +94,7 @@ observability and remote override, not for keeping plants alive.
 ### Prerequisites
 - **Node.js 18+** and npm
 - **arduino-cli** (or Arduino IDE) with the `esp32:esp32` board package — firmware only
-- A Supabase project — *optional*; without it the app runs in demo mode
+- A Firebase project — *optional*; without it the app runs in demo mode
 
 ### 1. Web app (`src/webapp/HydroLT`)
 
@@ -106,13 +106,13 @@ npm run dev
 
 Open <http://localhost:3000>.
 
-The dashboard runs in **demo mode with simulated data** when no Supabase environment variables
+The dashboard runs in **demo mode with simulated data** when no Firebase environment variables
 are set, so you can preview it immediately. To connect a real backend, copy `.env.example` to
-`.env.local` and fill in your Supabase project values — see [docs/setup.md](docs/setup.md).
+`.env.local` and fill in your Firebase project values — see [docs/setup.md](docs/setup.md).
 
 With a real backend, the first-run flow is: **sign up** (or sign in) → **connect** to your
 controller by entering its **unique device ID** → dashboard. The device ID is validated against
-the `devices` table and remembered in the browser.
+the `devices/{id}` node and remembered in the browser.
 
 ```bash
 npm run build     # production build
@@ -124,11 +124,11 @@ npm run typecheck # tsc --noEmit
 
 1. Open `src/esp/HydroLT/HydroLT.ino` in the Arduino IDE (or PlatformIO).
 2. Install the board support **esp32 by Espressif Systems** and the libraries:
-   - `PubSubClient` (Nick O'Leary)
+   - `Firebase Arduino Client Library for ESP8266 and ESP32` (Mobizt)
    - `DHT sensor library` (Adafruit) + `Adafruit Unified Sensor`
    - `ArduinoJson` (Benoit Blanchon)
    - *(the RS485 NPK probe needs no extra library — a Modbus RTU master is built into the sketch)*
-3. Set `WIFI_SSID`, `WIFI_PASS`, `MQTT_HOST`, and pin assignments for your actual wiring.
+3. Set `WIFI_SSID`, `WIFI_PASS`, `FB_API_KEY`, `FB_DB_URL`, `FB_EMAIL`, `FB_PASSWORD`, `DEVICE_ID`, and pin assignments for your actual wiring.
 4. Select **ESP32 Dev Module**, compile, upload.
 5. Serial monitor at **115200 baud** for boot and diagnostic logs.
 
@@ -143,7 +143,7 @@ Full wiring/setup guidance: [docs/setup.md](docs/setup.md).
 
 | Category | Component | Role |
 |---|---|---|
-| **Controller** | ESP32 Dev Module | Main controller, Wi-Fi + MQTT |
+| **Controller** | ESP32 Dev Module | Main controller, Wi-Fi + Firebase RTDB |
 | | MAX485 module | RS485 transceiver for the NPK probe |
 | **Sensors** | pH sensor + analog module | Nutrient acidity (GPIO 34) |
 | | EC sensor + module | Nutrient conductivity / strength (GPIO 35) |
@@ -168,7 +168,7 @@ hydrolyt/
 ├── LICENSE                       ← MIT
 ├── docs/                         ← project documentation
 │   ├── requirements.md           ← full requirements & acceptance criteria
-│   ├── database-schema.md        ← Supabase schema + RLS policies
+│   ├── database-schema.md        ← RTDB schema + security rules
 │   └── setup.md                  ← firmware & web app setup guide
 └── src/
     ├── esp/
@@ -179,7 +179,7 @@ hydrolyt/
             ├── app/              ← App Router pages (dashboard, history, controls, alerts)
             ├── components/       ← reusable UI components
             ├── hooks/            ← telemetry polling hooks
-            └── lib/              ← types, Supabase client, mock data
+            └── lib/              ← types, Firebase client, mock data
 ```
 
 ---
@@ -189,10 +189,10 @@ hydrolyt/
 | Document | Contents |
 |---|---|
 | [docs/requirements.md](docs/requirements.md) | Functional/hardware requirements, automation logic, scope, 3-week plan, acceptance criteria |
-| [docs/database-schema.md](docs/database-schema.md) | Supabase/PostgreSQL tables, indexes, RLS policies, retention |
-| [docs/setup.md](docs/setup.md) | Environment setup, firmware configuration, MQTT topics, deployment notes |
+| [docs/database-schema.md](docs/database-schema.md) | RTDB tree layout, security rules, retention, migration notes |
+| [docs/setup.md](docs/setup.md) | Environment setup, firmware configuration, RTDB paths, deployment notes |
 
-**MQTT topic layout:** `hydro/<device_id>/` → `telemetry`, `state`, `settings`, `alert`, `event`, `cmd`, `ack`, `status`.
+**RTDB layout:** `devices/<device_id>/` → `info`, `status`, `telemetry`, `history`, `state`, `settings`, `commands`, `acks`, `alerts`, `events` — plus `users/<uid>` for roles.
 
 ---
 
@@ -238,10 +238,10 @@ This project is licensed under the **MIT License** — see [LICENSE](LICENSE) fo
 
 - [Espressif Systems](https://www.espressif.com/) — ESP32 platform and Arduino core
 - [Arduino](https://www.arduino.cc/) — `arduino-cli` and the library ecosystem
-- [PubSubClient](https://github.com/knolleary/pubsubclient) by Nick O'Leary — MQTT client
+- [Mobizt's Firebase Arduino Client](https://github.com/mobizt/Firebase-ESP-Client) — Firebase Auth + Realtime Database for ESP32
 - [Adafruit](https://www.adafruit.com/) — DHT sensor library and Unified Sensor abstraction
 - [ArduinoJson](https://github.com/bblanchon/ArduinoJson) by Benoit Blanchon — JSON for embedded
-- [Supabase](https://supabase.com/) — Postgres, auth and row-level security
+- [Firebase](https://firebase.google.com/) — Realtime Database, Auth and security rules
 
 ---
 

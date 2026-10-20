@@ -24,7 +24,7 @@ export interface TelemetrySnapshot {
 /**
  * Polls device state every few seconds. Uses a plain interval instead of
  * WebSockets so the dashboard also works against the demo simulator, and
- * swaps to Supabase realtime when a real backend is connected.
+ * swaps to Firebase RTDB realtime when a real backend is connected.
  */
 export function useTelemetry(intervalMs = 4000): TelemetrySnapshot {
   const [reading, setReading] = useState<SensorReading | null>(null);

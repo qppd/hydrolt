@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import Badge from "@/components/Badge";
 import { useAuth } from "@/hooks/useAuth";
 import { usePairedDevice, type PairedDevice } from "@/lib/device";
-import { DEMO_MODE, DEVICE_ID, supabase } from "@/lib/supabase";
+import { DEMO_MODE, DEVICE_ID, fbDb } from "@/lib/firebase";
 
 export default function ConnectPage() {
   const router = useRouter();
@@ -19,15 +19,24 @@ export default function ConnectPage() {
 
   // Load the currently-paired device record for display.
   useEffect(() => {
-    if (!deviceId || DEMO_MODE || !supabase()) return;
-    supabase()!
-      .from("devices")
-      .select("id,name,location,status,firmware_version")
-      .eq("id", deviceId)
-      .maybeSingle()
-      .then(({ data }) => {
-        if (data) setDevice(data as PairedDevice);
-      });
+    if (!deviceId || DEMO_MODE || !fbDb()) return;
+    let cancelled = false;
+    import("firebase/database").then(({ ref, get }) =>
+      get(ref(fbDb()!, `devices/${deviceId}/info`)).then((snap) => {
+        if (cancelled || !snap.exists()) return;
+        const v = snap.val() ?? {};
+        setDevice({
+          id: deviceId,
+          name: v.name ?? null,
+          location: v.location ?? null,
+          status: v.status ?? null,
+          firmware_version: v.firmware_version ?? null,
+        });
+      })
+    );
+    return () => {
+      cancelled = true;
+    };
   }, [deviceId]);
 
   // Guards: demo mode needs no auth or pairing; real mode requires a session.
@@ -133,7 +142,7 @@ export default function ConnectPage() {
             </p>
           )}
           <p className="hint" style={{ marginTop: 12 }}>
-            Telemetry path: ESP32 → MQTT → Supabase → this app. The link is read-only for
+            Telemetry path: ESP32 → Firebase RTDB → this app. The link is read-only for
             sensors; control commands require an owner/operator role.
           </p>
         </div>

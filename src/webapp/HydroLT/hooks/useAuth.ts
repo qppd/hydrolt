@@ -1,38 +1,46 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import type { User } from "@supabase/supabase-js";
-import { DEMO_MODE, signOut, supabase } from "@/lib/supabase";
+import { DEMO_MODE, fbAuth, signOut } from "@/lib/firebase";
+
+export interface AuthUser {
+  uid: string;
+  email: string | null;
+}
 
 export interface AuthState {
-  user: User | null;
+  user: AuthUser | null;
   loading: boolean;
   signOut: () => Promise<void>;
 }
 
 /**
- * Tracks the Supabase session. In demo mode there is no user and the hook
- * reports "signed in" implicitly (the app is open), so pages never redirect
- * to /login while previewing with simulated data.
+ * Tracks the Firebase Auth session. In demo mode there is no user and the
+ * hook reports "signed in" implicitly (the app is open), so pages never
+ * redirect to /login while previewing with simulated data.
  */
 export function useAuth(): AuthState {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(!DEMO_MODE);
 
   useEffect(() => {
-    const sb = supabase();
-    if (!sb) return;
+    const a = fbAuth();
+    if (!a) return;
+    let unsub = () => {};
+    let cancelled = false;
 
-    sb.auth.getUser().then(({ data }) => {
-      setUser(data.user ?? null);
-      setLoading(false);
+    import("firebase/auth").then(({ onAuthStateChanged }) => {
+      if (cancelled) return;
+      unsub = onAuthStateChanged(a, (u) => {
+        setUser(u ? { uid: u.uid, email: u.email } : null);
+        setLoading(false);
+      });
     });
 
-    const { data: sub } = sb.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
-      setLoading(false);
-    });
-    return () => sub.subscription.unsubscribe();
+    return () => {
+      cancelled = true;
+      unsub();
+    };
   }, []);
 
   const doSignOut = useCallback(async () => {

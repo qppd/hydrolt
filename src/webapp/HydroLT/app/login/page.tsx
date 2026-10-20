@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Badge from "@/components/Badge";
-import { DEMO_MODE, signIn, signOut, signUp } from "@/lib/supabase";
+import { DEMO_MODE, signIn, signOut, signUp } from "@/lib/firebase";
 
 type Mode = "signin" | "signup";
 
@@ -57,7 +57,7 @@ export default function LoginPage() {
           </p>
         </div>
         <Badge tone={isDemo ? "warn" : "ok"}>
-          {isDemo ? "DEMO MODE — AUTH DISABLED" : "SUPABASE AUTH"}
+          {isDemo ? "DEMO MODE — AUTH DISABLED" : "FIREBASE AUTH"}
         </Badge>
       </div>
 
@@ -135,13 +135,13 @@ export default function LoginPage() {
           </header>
           <dl className="kv">
             <dt>Provider</dt>
-            <dd>Supabase Auth (email / password)</dd>
+            <dd>Firebase Auth (email / password)</dd>
             <dt>Roles</dt>
             <dd>owner · operator · viewer</dd>
             <dt>Enforcement</dt>
-            <dd>PostgreSQL RLS + server-side command path</dd>
-            <dt>Device keys</dt>
-            <dd>stored as hashes only</dd>
+            <dd>Realtime Database security rules + device-side validation</dd>
+            <dt>Device sign-in</dt>
+            <dd>own Firebase account per device</dd>
           </dl>
           <p className="hint">
             After signing in you&apos;ll connect to your machine by entering its unique
@@ -149,8 +149,9 @@ export default function LoginPage() {
           </p>
           <p className="hint">
             The ESP32 never exposes a public control endpoint: commands travel
-            app → <span className="mono">control_commands</span> → server-side ingestion →
-            MQTT → device, and the device validates every payload.
+            app → <span className="mono">devices/&#123;id&#125;/commands</span> (RTDB, security
+            rules enforced) → device stream → validated execution, and the device
+            acknowledges every command.
           </p>
         </div>
       </section>

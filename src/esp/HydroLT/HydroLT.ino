@@ -9,8 +9,8 @@
  *  Tasks : sensor acquisition (incl. NPK via RS485 Modbus probe),
  *          nutrient dosing (pH/EC + closed-loop N/P/K dosing),
  *          water-flow management, temperature/humidity control
- *          (exhaust fan + misting), MQTT telemetry & remote commands,
- *          local fail-safe automation.
+ *          (exhaust fan + misting), Firebase RTDB telemetry & remote
+ *          commands, local fail-safe automation.
  *
  *  Design rules:
  *    - Non-blocking, millis()-based main loop (no delay() in automation).
@@ -25,24 +25,26 @@
  *      EC is already above target, or the solution is not circulating.
  *
  *  Libraries (Arduino Library Manager):
- *    - PubSubClient        (Nick O'Leary)
+ *    - Firebase Arduino Client for ESP8266 and ESP32 (Mobizt) — Firebase
+ *      Auth (email/password device account) + Realtime Database over SSL.
  *    - DHT sensor library  (Adafruit) + Adafruit Unified Sensor
  *    - ArduinoJson 7.x     (Benoit Blanchon)  — uses the JsonDocument API
  *    - (no extra library) the RS485 NPK probe is driven by a small Modbus
  *      RTU master implemented below on UART2 through a MAX485 transceiver.
  *
- *  Verified against: Arduino-ESP32 core 3.3.11, ArduinoJson 7.4.3, PubSubClient 2.8,
- *  compiled for FQBN esp32:esp32:esp32 (ESP32 Dev Module).
+ *  Verified against: Arduino-ESP32 core 3.3.11, ArduinoJson 7.4.3,
+ *  Firebase-ESP-Client (Mobizt) 4.4.x, compiled for FQBN esp32:esp32:esp32.
  *
  *  Board: ESP32 Dev Module.  Serial monitor: 115200 baud.
  * ============================================================================
  */
 
 #include <WiFi.h>
-#include <PubSubClient.h>
+#include <Firebase_ESP_Client.h>
 #include <DHT.h>
 #include <ArduinoJson.h>
 #include <Preferences.h>
+#include <time.h>
 #include <esp_task_wdt.h>
 #if __has_include(<esp_idf_version.h>)
 #include <esp_idf_version.h>   // ESP_IDF_VERSION_MAJOR (watchdog API differs on v4/v5)
@@ -57,17 +59,29 @@ static const char* WIFI_SSID     = "YOUR_WIFI_SSID";
 static const char* WIFI_PASS     = "YOUR_WIFI_PASSWORD";
 static const uint32_t WIFI_RETRY_MS = 15000UL;   // reconnect attempt interval
 
-// --- MQTT ------------------------------------------------------------------
-static const char*  MQTT_HOST = "192.168.1.10";  // broker address
-static const uint16_t MQTT_PORT = 1883;
-static const char*  MQTT_USER = "";              // optional
-static const char*  MQTT_PASS = "";              // optional
-static const char*  DEVICE_ID = "hydro-01";
-static const uint32_t MQTT_RETRY_MS = 5000UL;
-static const uint32_t TELEMETRY_MS = 5000UL;     // telemetry publish interval
+// --- Firebase ---------------------------------------------------------------
+// Project settings (Firebase console → Project settings → General, and
+// Realtime Database). The device signs in with its own email/password
+// account (Authentication → Users) — never put a database secret here.
+static const char* FB_API_KEY   = "YOUR_WEB_API_KEY";
+static const char* FB_DB_URL    = "https://YOUR_PROJECT-default-rtdb.firebaseio.com";
+static const char* FB_EMAIL     = "device-hydro-01@your-project.example.com";
+static const char* FB_PASSWORD  = "YOUR_DEVICE_PASSWORD";
+static const char* DEVICE_ID    = "hydro-01";   // unique machine ID shown in the web app
+static const uint32_t FB_RETRY_MS   = 5000UL;   // reconnect attempt interval
+static const uint32_t TELEMETRY_MS  = 5000UL;   // telemetry write interval
 
-// Topic helpers -> "hydro/<deviceId>/..."
-#define TOPIC(suffix)  (String("hydro/") + DEVICE_ID + "/" + suffix).c_str()
+// RTDB layout for this device:
+//   devices/{deviceId}/telemetry   ← latest sensor sample (overwritten)
+//   devices/{deviceId}/history     ← readings archive (push-keyed, device prunes)
+//   devices/{deviceId}/state       ← actuator state (overwritten)
+//   devices/{deviceId}/settings    ← control settings (web writes, device streams)
+//   devices/{deviceId}/commands    ← pending remote commands (web pushes, device streams & clears)
+//   devices/{deviceId}/acks        ← command acknowledgements
+//   devices/{deviceId}/alerts      ← alert history
+//   devices/{deviceId}/events      ← device events
+//   devices/{deviceId}/status      ← "online"/"offline"
+#define DB_PATH(suffix) (String("devices/") + DEVICE_ID + "/" + suffix).c_str()
 
 // --- Pin map (ESP32 DevKit) -------------------------------------------------
 // Analog sensors use ADC1 pins only (Wi-Fi blocks ADC2).
@@ -101,7 +115,7 @@ static const uint8_t  NPK_FAIL_LIMIT       = 3;        // consecutive bad frames
 // Relay logic: many cheap relay boards are ACTIVE-LOW.
 static const bool RELAY_ACTIVE_LOW = true;
 
-// --- Default control settings (overridable at runtime via MQTT/NVS) --------
+// --- Default control settings (overridable at runtime via RTDB/NVS) --------
 static const float DEFAULT_PH_MIN          = 5.50f;  // melon optimal ~5.5–6.5
 static const float DEFAULT_PH_MAX          = 6.50f;
 static const float DEFAULT_EC_MIN          = 1.40f;  // mS/cm
@@ -226,11 +240,16 @@ uint32_t fanChangedMs = 0;
 uint32_t mistStartMs = 0;
 
 // networking
-WiFiClient   wifiClient;
-PubSubClient mqtt(wifiClient);
-uint32_t lastWifiTryMs = 0, lastMqttTryMs = 0, lastTelemetryMs = 0;
+FirebaseConfig   fbConfig;
+FirebaseAuth     fbAuth;
+FirebaseData     fbdo;          // general RTDB operations
+FirebaseData     fbdoCmdStream; // stream: devices/{id}/commands
+FirebaseData     fbdoSetStream; // stream: devices/{id}/settings
+uint32_t lastWifiTryMs = 0, lastFbTryMs = 0, lastTelemetryMs = 0;
 uint32_t lastStateMs = 0, lastHeartbeatMs = 0;
 bool     wifiWasConnected = false;
+bool     fbSignedIn = false;
+bool     fbStreamsUp = false;
 
 // runtime state shared by setup()/loop()
 Preferences prefs;
@@ -530,30 +549,33 @@ void sampleSensors() {
 }
 
 // ===========================================================================
-// 6. ALERTS / EVENTS  (published over MQTT, mirrored to the web app)
+// 6. ALERTS / EVENTS  (pushed to Firebase RTDB, mirrored to the web app)
 // ===========================================================================
+
+bool dbReady() {
+  return fbSignedIn && Firebase.ready();
+}
 
 void publishAlert(const char* severity, const char* type, const String& msg) {
   logLine(String("ALERT [") + severity + "] " + type + ": " + msg);
-  if (!mqtt.connected()) return;
-  JsonDocument doc;
-  doc["severity"] = severity;
-  doc["type"]     = type;
-  doc["msg"]      = msg;
-  doc["ts"]       = millis();
-  String out; serializeJson(doc, out);
-  mqtt.publish(TOPIC("alert"), out.c_str(), false);
+  if (!dbReady()) return;
+  FirebaseJson json;
+  json.set("severity", severity);
+  json.set("type", type);
+  json.set("msg", msg);
+  json.set("ts", (int64_t)time(nullptr));   // 0 until NTP syncs; web falls back to push key order
+  json.set("resolved", false);
+  Firebase.RTDB.pushJSON(&fbdo, DB_PATH("alerts"), &json);
 }
 
 void publishEvent(const char* eventType, const String& details) {
   logLine(String("EVENT ") + eventType + " " + details);
-  if (!mqtt.connected()) return;
-  JsonDocument doc;
-  doc["event"] = eventType;
-  doc["details"] = details;
-  doc["ts"] = millis();
-  String out; serializeJson(doc, out);
-  mqtt.publish(TOPIC("event"), out.c_str(), false);
+  if (!dbReady()) return;
+  FirebaseJson json;
+  json.set("event", eventType);
+  json.set("details", details);
+  json.set("ts", (int64_t)time(nullptr));
+  Firebase.RTDB.pushJSON(&fbdo, DB_PATH("events"), &json);
 }
 
 // ===========================================================================
@@ -875,89 +897,143 @@ void automationClimate(uint32_t now) {
 }
 
 // ===========================================================================
-// 11. TELEMETRY & STATE PUBLISHING
+// 11. TELEMETRY & STATE PUBLISHING  (Firebase RTDB)
 // ===========================================================================
 
-void publishTelemetry() {
-  if (!mqtt.connected()) return;
-  JsonDocument doc;
-  doc["ts"]   = millis();
-  if (sens.phOk)   doc["ph"]   = sens.ph;
-  if (sens.ecOk)   doc["ec"]   = sens.ec;
-  if (!isnan(sens.temp)) doc["temp"] = sens.temp;
-  if (!isnan(sens.hum))  doc["hum"]  = sens.hum;
+// History archive: one push node per reading. RTDB bills per stored MB, so
+// the device prunes entries older than HISTORY_DAYS on every archive write.
+static const uint32_t HISTORY_INTERVAL_MS = 60000UL;  // archive every minute
+static const uint8_t  HISTORY_DAYS        = 30;       // on-device retention
+uint32_t lastHistoryMs = 0;
+
+void buildReadingJson(FirebaseJson& json) {
+  json.set("ts", (int64_t)time(nullptr));   // epoch seconds (NTP); 0 before sync
+  json.set("device_ms", (int64_t)millis());
+  if (sens.phOk)   json.set("ph", sens.ph);
+  if (sens.ecOk)   json.set("ec", sens.ec);
+  if (!isnan(sens.temp)) json.set("temp", sens.temp);
+  if (!isnan(sens.hum))  json.set("hum", sens.hum);
   if (sens.npkOk) {
-    doc["npk_n"] = sens.npkN;
-    doc["npk_p"] = sens.npkP;
-    doc["npk_k"] = sens.npkK;
+    json.set("npk_n", sens.npkN);
+    json.set("npk_p", sens.npkP);
+    json.set("npk_k", sens.npkK);
   }
-  doc["flow"] = sens.flow;
-  JsonObject flags = doc["flags"].to<JsonObject>();
-  flags["ph"] = sens.phOk; flags["ec"] = sens.ecOk;
-  flags["climate"] = sens.climateOk; flags["flow"] = sens.flowOk;
-  flags["npk"] = sens.npkOk;
-  String out; serializeJson(doc, out);
-  mqtt.publish(TOPIC("telemetry"), out.c_str(), false);
+  json.set("flow", sens.flow);
+  FirebaseJson flags;
+  flags.set("ph", sens.phOk); flags.set("ec", sens.ecOk);
+  flags.set("climate", sens.climateOk); flags.set("flow", sens.flowOk);
+  flags.set("npk", sens.npkOk);
+  json.set("flags", flags);
+}
+
+/** Delete the oldest history nodes until under the retention window.
+ *  Runs rarely and bounded (one small query per pass) so it never stalls
+ *  the control loop for long. */
+void pruneHistory() {
+  time_t nowT = time(nullptr);
+  if (nowT < 1700000000) return;             // no NTP time yet — skip
+  time_t cutoff = nowT - (time_t)HISTORY_DAYS * 86400;
+  QueryFilter q;
+  q.orderBy("$key").limitToFirst(20);
+  String root = DB_PATH("history");
+  if (!Firebase.RTDB.getJSON(&fbdo, root.c_str(), &q)) return;
+  if (fbdo.dataTypeEnum() != fb_esp_rtdb_data_type_json) return;
+  FirebaseJson* json = fbdo.jsonObjectPtr();
+  if (!json) return;
+  size_t n = json->iteratorBegin();
+  FirebaseJson::IteratorValue v;
+  for (size_t i = 0; i < n; i++) {
+    v = json->valueAt(i);
+    String childPath = root + "/" + v.key;
+    if (Firebase.RTDB.getJSON(&fbdo, childPath.c_str())) {
+      int64_t ts = 0;
+      FirebaseJson* child = fbdo.jsonObjectPtr();
+      if (child) {
+        FirebaseJsonData d;
+        if (child->get(d, "ts")) ts = (int64_t)d.to<int64_t>();
+      }
+      if (ts > 0 && (time_t)ts < cutoff)
+        Firebase.RTDB.deleteNode(&fbdo, childPath.c_str());
+      else
+        break;   // keys are chronological — first fresh node ends pruning
+    }
+  }
+  json->iteratorEnd();
+}
+
+void publishTelemetry() {
+  if (!dbReady()) return;
+  FirebaseJson json;
+  buildReadingJson(json);
+  Firebase.RTDB.setJSON(&fbdo, DB_PATH("telemetry"), &json);
+
+  if (millis() - lastHistoryMs >= HISTORY_INTERVAL_MS) {
+    lastHistoryMs = millis();
+    if (Firebase.RTDB.pushJSON(&fbdo, DB_PATH("history"), &json)) pruneHistory();
+  }
 }
 
 void publishState() {
-  if (!mqtt.connected()) return;
-  JsonDocument doc;
-  doc["pump"]    = act.pump ? 1 : 0;
-  doc["fan"]     = act.fan ? 1 : 0;
-  doc["misting"] = act.misting ? 1 : 0;
-  doc["doseA"]   = act.doseA ? 1 : 0;
-  doc["doseB"]   = act.doseB ? 1 : 0;
-  doc["doseN"]   = act.doseN ? 1 : 0;
-  doc["doseP"]   = act.doseP ? 1 : 0;
-  doc["doseK"]   = act.doseK ? 1 : 0;
-  doc["npk_ok"]  = sens.npkOk ? 1 : 0;
-  doc["mode"]    = (act.mode == MODE_AUTO) ? "auto" : "manual";
-  doc["doseState"] = (doseState == DOSE_IDLE) ? "idle"
-                    : (doseState == DOSE_RUNNING) ? "running" : "mixing";
-  String out; serializeJson(doc, out);
-  mqtt.publish(TOPIC("state"), out.c_str(), true);   // retained
+  if (!dbReady()) return;
+  FirebaseJson json;
+  json.set("pump", act.pump ? 1 : 0);
+  json.set("fan", act.fan ? 1 : 0);
+  json.set("misting", act.misting ? 1 : 0);
+  json.set("doseA", act.doseA ? 1 : 0);
+  json.set("doseB", act.doseB ? 1 : 0);
+  json.set("doseN", act.doseN ? 1 : 0);
+  json.set("doseP", act.doseP ? 1 : 0);
+  json.set("doseK", act.doseK ? 1 : 0);
+  json.set("npk_ok", sens.npkOk ? 1 : 0);
+  json.set("mode", (act.mode == MODE_AUTO) ? "auto" : "manual");
+  json.set("doseState", (doseState == DOSE_IDLE) ? "idle"
+                        : (doseState == DOSE_RUNNING) ? "running" : "mixing");
+  json.set("updated_at", (int64_t)time(nullptr));
+  json.set("device_ms", (int64_t)millis());
+  Firebase.RTDB.setJSON(&fbdo, DB_PATH("state"), &json);
 }
 
 void publishSettings() {
-  if (!mqtt.connected()) return;
-  JsonDocument doc;
-  doc["ph_min"] = cfg.phMin;
-  doc["ph_max"] = cfg.phMax;
-  doc["ec_min"] = cfg.ecMin;
-  doc["ec_max"] = cfg.ecMax;
-  doc["temperature_setpoint"] = cfg.tempSetpoint;
-  doc["temperature_hysteresis"] = cfg.tempHyst;
-  doc["humidity_limit"] = cfg.humLimit;
-  doc["min_flow_rate"] = cfg.minFlow;
-  doc["dosing_max_runtime_s"] = cfg.doseMaxMs / 1000;
-  doc["dosing_cooldown_s"] = cfg.doseCooldownS;
-  doc["misting_max_s"] = cfg.mistMaxS;
-  doc["npk_n_min"] = cfg.npkNMin;
-  doc["npk_n_max"] = cfg.npkNMax;
-  doc["npk_p_min"] = cfg.npkPMin;
-  doc["npk_p_max"] = cfg.npkPMax;
-  doc["npk_k_min"] = cfg.npkKMin;
-  doc["npk_k_max"] = cfg.npkKMax;
-  doc["npk_dosing_max_runtime_s"] = cfg.npkDoseMaxMs / 1000;
-  doc["npk_dose_cooldown_s"] = cfg.npkDoseCooldownS;
-  doc["npk_dosing_enabled"] = cfg.npkAutoDose ? 1 : 0;
-  String out; serializeJson(doc, out);
-  mqtt.publish(TOPIC("settings"), out.c_str(), true);
+  if (!dbReady()) return;
+  FirebaseJson json;
+  json.set("ph_min", cfg.phMin);
+  json.set("ph_max", cfg.phMax);
+  json.set("ec_min", cfg.ecMin);
+  json.set("ec_max", cfg.ecMax);
+  json.set("temperature_setpoint", cfg.tempSetpoint);
+  json.set("temperature_hysteresis", cfg.tempHyst);
+  json.set("humidity_limit", cfg.humLimit);
+  json.set("min_flow_rate", cfg.minFlow);
+  json.set("dosing_max_runtime_s", cfg.doseMaxMs / 1000);
+  json.set("dosing_cooldown_s", cfg.doseCooldownS);
+  json.set("misting_max_s", cfg.mistMaxS);
+  json.set("npk_n_min", cfg.npkNMin);
+  json.set("npk_n_max", cfg.npkNMax);
+  json.set("npk_p_min", cfg.npkPMin);
+  json.set("npk_p_max", cfg.npkPMax);
+  json.set("npk_k_min", cfg.npkKMin);
+  json.set("npk_k_max", cfg.npkKMax);
+  json.set("npk_dosing_max_runtime_s", cfg.npkDoseMaxMs / 1000);
+  json.set("npk_dose_cooldown_s", cfg.npkDoseCooldownS);
+  json.set("npk_dosing_enabled", cfg.npkAutoDose ? 1 : 0);
+  Firebase.RTDB.setJSON(&fbdo, DB_PATH("settings"), &json);
 }
 
 // ===========================================================================
-// 12. MQTT COMMAND HANDLING  — validated input (FR-07 / FR-10 / FR-12)
+// 12. FIREBASE COMMAND HANDLING  — validated input (FR-07 / FR-10 / FR-12)
+//     The web app pushes a command object to devices/{id}/commands/{key};
+//     the RTDB stream delivers it, the device validates + executes, writes an
+//     acknowledgement, and removes the processed node.
 // ===========================================================================
 
 void sendAck(const String& id, const char* status, const String& note = "") {
-  if (!mqtt.connected() || id == "") return;
-  JsonDocument doc;
-  doc["cmd_id"] = id;
-  doc["status"] = status;
-  if (note.length()) doc["note"] = note;
-  String out; serializeJson(doc, out);
-  mqtt.publish(TOPIC("ack"), out.c_str(), false);
+  if (!dbReady() || id == "") return;
+  FirebaseJson json;
+  json.set("cmd_id", id);
+  json.set("status", status);
+  if (note.length()) json.set("note", note);
+  json.set("ts", (int64_t)time(nullptr));
+  Firebase.RTDB.pushJSON(&fbdo, DB_PATH("acks"), &json);
   String noteText = note.length() ? String(" (") + note + ")" : String("");
   logLine(String("ACK ") + id + " -> " + status + noteText);
 }
@@ -1123,7 +1199,7 @@ void handleCommand(const char* payload, unsigned int length) {
 
   } else if (strcmp(cmd, "restart") == 0) {
     sendAck(id, "ok", "restarting");
-    mqtt.publish(TOPIC("status"), "offline", true);
+    if (dbReady()) Firebase.RTDB.setString(&fbdo, DB_PATH("status"), "offline");
     delay(300);
     ESP.restart();
 
@@ -1134,12 +1210,53 @@ void handleCommand(const char* payload, unsigned int length) {
   publishState();
 }
 
-void onMqttMessage(char* topic, byte* payload, unsigned int length) {
-  handleCommand((const char*)payload, length);
+// --- Firebase RTDB command stream -------------------------------------------
+// The web app pushes command objects to devices/{id}/commands/{pushKey}.
+// Stream callbacks run in the library task context, so they only stash the
+// payload; execution happens on the main loop in maintainFirebase().
+volatile bool cmdPayloadReady = false;
+String cmdPayloadBuf;        // raw JSON of the latest commands-node change
+String lastCmdKeySeen = "";  // highest push key already executed
+
+void cmdStreamCallback(FirebaseStream data) {
+  if (data.dataTypeEnum() == fb_esp_rtdb_data_type_json) {
+    cmdPayloadBuf = data.payload();
+    cmdPayloadReady = true;
+  }
+}
+
+void cmdStreamTimeoutCallback(bool timeout) {
+  if (timeout) logLine("RTDB command stream timed out — will reattach");
+}
+
+/** Execute every not-yet-executed command child, then remove it. Push keys
+ *  sort chronologically, so the "> lastCmdKeySeen" guard skips replays after
+ *  a reconnect while fresh keys always run. */
+void processPendingCommands() {
+  if (!cmdPayloadReady) return;
+  cmdPayloadReady = false;
+
+  JsonDocument doc;
+  if (deserializeJson(doc, cmdPayloadBuf)) {
+    publishAlert("warning", "bad_command", "Malformed command payload rejected.");
+    return;
+  }
+  JsonObject root = doc.as<JsonObject>();
+  String cmdRootPath = DB_PATH("commands");
+  for (JsonPair kv : root) {
+    String key(kv.key().c_str());
+    if (lastCmdKeySeen.length() && key <= lastCmdKeySeen) continue;
+    String child;
+    serializeJson(kv.value(), child);
+    handleCommand(child.c_str(), child.length());
+    lastCmdKeySeen = key;
+    // consumed — clear the node so reconnects never replay it
+    Firebase.RTDB.deleteNode(&fbdo, (cmdRootPath + "/" + key).c_str());
+  }
 }
 
 // ===========================================================================
-// 13. CONNECTIVITY (Wi-Fi + MQTT) — never blocks local automation
+// 13. CONNECTIVITY (Wi-Fi + Firebase) — never blocks local automation
 // ===========================================================================
 
 void maintainWifi(uint32_t now) {
@@ -1164,31 +1281,41 @@ void maintainWifi(uint32_t now) {
   }
 }
 
-void maintainMqtt(uint32_t now) {
+/** Sign in to Firebase and keep the command stream attached. Never blocks
+ *  local automation: if the link is down, everything keeps running. */
+void maintainFirebase(uint32_t now) {
   if (WiFi.status() != WL_CONNECTED) return;
-  if (mqtt.connected()) { mqtt.loop(); return; }
-  if (now - lastMqttTryMs < MQTT_RETRY_MS) return;
-  lastMqttTryMs = now;
 
-  String clientId = String(DEVICE_ID) + "-" + String((uint32_t)esp_random(), HEX);
-  String willTopic = TOPIC("status");
-  bool ok;
-  if (strlen(MQTT_USER) > 0)
-    ok = mqtt.connect(clientId.c_str(), MQTT_USER, MQTT_PASS, willTopic.c_str(), 1, true, "offline");
-  else
-    ok = mqtt.connect(clientId.c_str(), willTopic.c_str(), 1, true, "offline");
+  if (!fbSignedIn) {
+    if (now - lastFbTryMs < FB_RETRY_MS) return;
+    lastFbTryMs = now;
+    Firebase.begin(&fbConfig, &fbAuth);
+    Firebase.reconnectWiFi(true);
+    logLine("Firebase: signing in...");
+  }
+  if (!Firebase.ready()) return;
 
-  if (ok) {
-    logLine(String("MQTT connected to ") + MQTT_HOST);
-    mqtt.publish(willTopic.c_str(), "online", true);
-    mqtt.subscribe(TOPIC("cmd"));
-    mqtt.subscribe(TOPIC("settings"));
+  if (!fbSignedIn) {
+    fbSignedIn = true;
+    logLine(String("Firebase RTDB ready: ") + FB_DB_URL);
+    // attach the command stream (fires on every push to commands/)
+    Firebase.RTDB.beginStream(&fbdoCmdStream, DB_PATH("commands"));
+    Firebase.RTDB.setStreamCallback(&fbdoCmdStream, cmdStreamCallback, cmdStreamTimeoutCallback);
+    // presence + initial state
+    Firebase.RTDB.setString(&fbdo, DB_PATH("status"), "online");
     publishSettings();
     publishState();
     publishEvent("boot", String("reset_reason=") + (int)esp_reset_reason());
-  } else {
-    logLine(String("MQTT connect failed rc=") + mqtt.state());
   }
+
+  // reattach the stream if the library dropped it (e.g. after a Wi-Fi blip)
+  if (!Firebase.RTDB.readStream(&fbdoCmdStream) && fbdoCmdStream.streamTimeout()) {
+    logLine("RTDB stream reattach");
+    Firebase.RTDB.beginStream(&fbdoCmdStream, DB_PATH("commands"));
+    Firebase.RTDB.setStreamCallback(&fbdoCmdStream, cmdStreamCallback, cmdStreamTimeoutCallback);
+  }
+
+  processPendingCommands();
 }
 
 // ===========================================================================
@@ -1244,10 +1371,14 @@ void setup() {
   WiFi.setAutoReconnect(true);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
 
-  // MQTT
-  mqtt.setServer(MQTT_HOST, MQTT_PORT);
-  mqtt.setCallback(onMqttMessage);
-  mqtt.setBufferSize(1024);   // settings/state payloads carry the NPK fields too
+  // Firebase RTDB (fail-soft: signs in on first maintainFirebase() pass)
+  fbConfig.api_key = FB_API_KEY;
+  fbConfig.database_url = FB_DB_URL;
+  fbAuth.user.email = FB_EMAIL;
+  fbAuth.user.password = FB_PASSWORD;
+
+  // NTP — telemetry timestamps are epoch seconds; without this they stay 0
+  configTime(0, 0, "pool.ntp.org", "time.nist.gov");
 
   // watchdog: 30 s, main loop feeds it.
   // ESP-IDF v5 (Arduino-ESP32 core 3.x) changed the API from the v4 form.
@@ -1268,7 +1399,7 @@ void setup() {
   prefs.end();
   logLine(booted ? "REBOOT — resuming with saved settings" : "FIRST BOOT — defaults active");
 
-  lastWifiTryMs = lastMqttTryMs = millis();
+  lastWifiTryMs = lastFbTryMs = millis();
 }
 
 void loop() {
@@ -1284,10 +1415,10 @@ void loop() {
 
   // --- 2. connectivity (optional, never required for safety) ---
   maintainWifi(now);
-  maintainMqtt(now);
+  maintainFirebase(now);
 
   // --- 3. publishing ---
-  if (mqtt.connected()) {
+  if (dbReady()) {
     if (now - lastTelemetryMs >= TELEMETRY_MS) { lastTelemetryMs = now; publishTelemetry(); }
     if (now - lastStateMs >= STATE_PUBLISH_MS)   { lastStateMs = now;     publishState(); }
     if (now - lastHeartbeatMs >= HEARTBEAT_MS)   { lastHeartbeatMs = now; publishEvent("heartbeat", "ok"); }
@@ -1295,7 +1426,7 @@ void loop() {
 
   // --- 4. status LED: solid=online, slow blink=local only, fast=fault ---
   bool fault = !sens.phOk || !sens.ecOk || !sens.climateOk || (NPK_ENABLED && !sens.npkOk);
-  uint32_t blinkMs = fault ? 100UL : (mqtt.connected() ? 0xFFFFFFFFUL : 750UL);
+  uint32_t blinkMs = fault ? 100UL : (dbReady() ? 0xFFFFFFFFUL : 750UL);
   if (blinkMs == 0xFFFFFFFFUL) {
     digitalWrite(PIN_STATUS_LED, HIGH);
   } else {

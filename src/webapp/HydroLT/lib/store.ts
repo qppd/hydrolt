@@ -1,6 +1,6 @@
 import { DEMO_DEVICE_ID, demo, seedHistory } from "./demo";
 import { activeDeviceId } from "./device";
-import { DEMO_MODE, supabase } from "./supabase";
+import { DEMO_MODE, fbDb } from "./firebase";
 import type {
   Alert,
   CommandStatus,
@@ -15,27 +15,59 @@ import type {
 /**
  * Single data-access layer used by every page.
  *
- * Real mode  -> Supabase (PostgreSQL, RLS-protected).
+ * Real mode  -> Firebase Realtime Database (RTDB-security protected).
  * Demo mode  -> in-memory simulated device (lib/demo.ts).
  *
- * Server-side ingestion (MQTT -> Supabase Edge Function) is what actually
- * writes telemetry and executes commands for the physical device; the browser
- * only inserts `control_commands` rows that are authorized by RLS.
+ * RTDB layout (mirrored by the firmware in HydroLT.ino):
+ *   devices/{id}/info        { name, location, status, firmware_version }
+ *   devices/{id}/telemetry   { ts, ph, ec, temp, hum, flow, npk_n, ... }
+ *   devices/{id}/history     { <pushKey>: { ...same as telemetry... } }
+ *   devices/{id}/state       { pump, fan, misting, mode, ... }
+ *   devices/{id}/settings    { ph_min, ph_max, ... }
+ *   devices/{id}/commands    { <pushKey>: { cmd, value, ... } }  (web -> device)
+ *   devices/{id}/alerts      { <pushKey>: { severity, type, msg, resolved } }
+ *   devices/{id}/events      { <pushKey>: { event, details, ts } }
  */
 
-/** Device the web app is connected to (paired by the user on /connect). */
 function deviceId(): string {
   return activeDeviceId();
 }
 
-function fmt(d: Date) {
-  return d.toISOString();
+function devicePath(...parts: string[]): string {
+  return ["devices", deviceId(), ...parts].join("/");
+}
+
+/* ------------------------------------------------------ type adaptation */
+
+/** Firmware telemetry JSON -> SensorReading */
+function rowToReading(key: string, v: Record<string, unknown>): SensorReading {
+  const ts = typeof v.ts === "number" && v.ts > 1700000000
+    ? new Date(v.ts * 1000).toISOString()
+    : typeof v.device_ms === "number"
+      ? new Date(Date.now() - v.device_ms).toISOString()
+      : new Date().toISOString();
+  const num = (x: unknown): number | null =>
+    typeof x === "number" && Number.isFinite(x) ? x : null;
+  return {
+    id: key,
+    device_id: deviceId(),
+    recorded_at: ts,
+    ph: num(v.ph),
+    ec: num(v.ec),
+    temperature: num(v.temp),
+    humidity: num(v.hum),
+    flow_rate: num(v.flow),
+    npk_n: num(v.npk_n),
+    npk_p: num(v.npk_p),
+    npk_k: num(v.npk_k),
+    source: "device",
+  };
 }
 
 /* ------------------------------------------------------------------ device */
 
 export async function getDevice(): Promise<Device> {
-  if (DEMO_MODE || !supabase()) {
+  if (DEMO_MODE || !fbDb()) {
     return {
       id: DEMO_DEVICE_ID,
       name: "Greenhouse Controller",
@@ -45,27 +77,35 @@ export async function getDevice(): Promise<Device> {
       last_seen_at: new Date().toISOString(),
     };
   }
-  const { data, error } = await supabase()!
-    .from("devices")
-    .select("id,name,location,status,firmware_version,last_seen_at")
-    .eq("id", deviceId())
-    .single();
-  if (error || !data) throw new Error(error?.message ?? "device not found");
-  return data as Device;
+  const { ref, get } = await import("firebase/database");
+  const [infoSnap, statusSnap, teleSnap] = await Promise.all([
+    get(ref(fbDb()!, devicePath("info"))),
+    get(ref(fbDb()!, devicePath("status"))),
+    get(ref(fbDb()!, devicePath("telemetry", "ts"))),
+  ]);
+  const info = infoSnap.val() ?? {};
+  const status = statusSnap.val();
+  const ts = teleSnap.val();
+  return {
+    id: deviceId(),
+    name: info.name ?? "Greenhouse Controller",
+    location: info.location ?? null,
+    status: status === "online" ? "online" : "offline",
+    firmware_version: info.firmware_version ?? null,
+    last_seen_at:
+      typeof ts === "number" && ts > 1700000000
+        ? new Date(ts * 1000).toISOString()
+        : null,
+  };
 }
 
 /* --------------------------------------------------------------- readings */
 
 export async function getLatestReading(): Promise<SensorReading> {
-  if (DEMO_MODE || !supabase()) return demo.latest();
-  const { data, error } = await supabase()!
-    .from("sensor_readings")
-    .select("*")
-    .eq("device_id", deviceId())
-    .order("recorded_at", { ascending: false })
-    .limit(1);
-  if (error) throw new Error(error.message);
-  if (!data || data.length === 0) {
+  if (DEMO_MODE || !fbDb()) return demo.latest();
+  const { ref, get } = await import("firebase/database");
+  const snap = await get(ref(fbDb()!, devicePath("telemetry")));
+  if (!snap.exists()) {
     return {
       device_id: deviceId(),
       recorded_at: new Date().toISOString(),
@@ -79,7 +119,7 @@ export async function getLatestReading(): Promise<SensorReading> {
       npk_k: null,
     };
   }
-  return data[0] as SensorReading;
+  return rowToReading("latest", snap.val());
 }
 
 export type RangeKey = "6h" | "24h" | "7d" | "30d";
@@ -99,46 +139,53 @@ const RANGE_MINUTES: Record<RangeKey, number> = {
 };
 
 export async function getReadings(range: RangeKey = "24h"): Promise<SensorReading[]> {
-  if (DEMO_MODE || !supabase()) return seedHistory(RANGE_MS[range] / 60_000, RANGE_MINUTES[range]);
-  const since = fmt(new Date(Date.now() - RANGE_MS[range]));
-  const { data, error } = await supabase()!
-    .from("sensor_readings")
-    .select("*")
-    .eq("device_id", deviceId())
-    .gte("recorded_at", since)
-    .order("recorded_at", { ascending: true })
-    .limit(5000);
-  if (error) throw new Error(error.message);
-  return (data ?? []) as SensorReading[];
+  if (DEMO_MODE || !fbDb()) return seedHistory(RANGE_MS[range] / 60_000, RANGE_MINUTES[range]);
+  const { ref, get } = await import("firebase/database");
+  const snap = await get(ref(fbDb()!, devicePath("history")));
+  if (!snap.exists()) return [];
+  const cutoff = Date.now() - RANGE_MS[range];
+  const rows: SensorReading[] = [];
+  const val = snap.val() as Record<string, Record<string, unknown>>;
+  for (const [key, v] of Object.entries(val)) {
+    const r = rowToReading(key, v);
+    if (new Date(r.recorded_at).getTime() >= cutoff) rows.push(r);
+  }
+  rows.sort((a, b) => new Date(a.recorded_at).getTime() - new Date(b.recorded_at).getTime());
+  return rows;
 }
 
 /* ------------------------------------------------------------------ state */
 
 export async function getDeviceState(): Promise<DeviceState> {
-  if (DEMO_MODE || !supabase()) {
+  if (DEMO_MODE || !fbDb()) {
     demo.latest(); // advance the simulation
     return demo.state;
   }
-  const { data, error } = await supabase()!
-    .from("device_states")
-    .select("*")
-    .eq("device_id", deviceId())
-    .maybeSingle();
-  if (error) throw new Error(error.message);
-  if (data) return data as DeviceState;
+  const { ref, get } = await import("firebase/database");
+  const snap = await get(ref(fbDb()!, devicePath("state")));
+  const v = snap.val() ?? {};
+  const num = (x: unknown) => (typeof x === "number" ? x : 0);
   return {
     device_id: deviceId(),
-    pump_on: false,
-    fan_on: false,
-    misting_on: false,
-    mode: "auto",
-    updated_at: new Date().toISOString(),
+    pump_on: num(v.pump) === 1,
+    fan_on: num(v.fan) === 1,
+    misting_on: num(v.misting) === 1,
+    dosing_a_on: num(v.doseA) === 1,
+    dosing_b_on: num(v.doseB) === 1,
+    dosing_n_on: num(v.doseN) === 1,
+    dosing_p_on: num(v.doseP) === 1,
+    dosing_k_on: num(v.doseK) === 1,
+    mode: v.mode === "manual" ? "manual" : "auto",
+    updated_at:
+      typeof v.updated_at === "number" && v.updated_at > 1700000000
+        ? new Date(v.updated_at * 1000).toISOString()
+        : new Date().toISOString(),
   };
 }
 
 /* --------------------------------------------------------------- settings */
 
-/** Fallback limits used when a device has no saved settings row yet. */
+/** Fallback limits used when a device has no saved settings node yet. */
 export function defaultSettings(deviceIdValue: string = deviceId()): ControlSettings {
   return {
     device_id: deviceIdValue,
@@ -166,108 +213,117 @@ export function defaultSettings(deviceIdValue: string = deviceId()): ControlSett
 }
 
 export async function getSettings(): Promise<ControlSettings> {
-  if (DEMO_MODE || !supabase()) return demo.settings;
-  const { data, error } = await supabase()!
-    .from("control_settings")
-    .select("*")
-    .eq("device_id", deviceId())
-    .maybeSingle();
-  if (error) throw new Error(error.message);
-  return (data as ControlSettings) ?? defaultSettings();
+  if (DEMO_MODE || !fbDb()) return demo.settings;
+  const { ref, get } = await import("firebase/database");
+  const snap = await get(ref(fbDb()!, devicePath("settings")));
+  if (!snap.exists()) return defaultSettings();
+  return { ...defaultSettings(), ...(snap.val() as Partial<ControlSettings>) };
 }
 
 export async function saveSettings(patch: Partial<ControlSettings>): Promise<ControlSettings> {
-  if (DEMO_MODE || !supabase()) {
+  if (DEMO_MODE || !fbDb()) {
     demo.settings = { ...demo.settings, ...patch };
     return demo.settings;
   }
-  const { data, error } = await supabase()!
-    .from("control_settings")
-    .upsert({ ...patch, device_id: deviceId(), updated_at: new Date().toISOString() })
-    .select()
-    .single();
-  if (error) throw new Error(error.message);
-  return data as ControlSettings;
+  const { ref, update } = await import("firebase/database");
+  const { device_id: _drop, ...rest } = patch;
+  await update(ref(fbDb()!, devicePath("settings")), rest);
+  return getSettings();
 }
 
 /* ------------------------------------------------------------------ alerts */
 
 export async function getAlerts(onlyOpen = false): Promise<Alert[]> {
-  if (DEMO_MODE || !supabase()) {
+  if (DEMO_MODE || !fbDb()) {
     const rows = [...demo.alerts].sort(
       (a, b) => +new Date(b.created_at) - +new Date(a.created_at)
     );
     return onlyOpen ? rows.filter((a) => !a.resolved_at) : rows;
   }
-  let q = supabase()!
-    .from("alerts")
-    .select("*")
-    .eq("device_id", deviceId())
-    .order("created_at", { ascending: false })
-    .limit(200);
-  if (onlyOpen) q = q.is("resolved_at", null);
-  const { data, error } = await q;
-  if (error) throw new Error(error.message);
-  return (data ?? []) as Alert[];
+  const { ref, get } = await import("firebase/database");
+  const snap = await get(ref(fbDb()!, devicePath("alerts")));
+  if (!snap.exists()) return [];
+  const val = snap.val() as Record<string, Record<string, unknown>>;
+  const rows: Alert[] = Object.entries(val).map(([key, v]) => ({
+    id: key,
+    device_id: deviceId(),
+    severity: (v.severity as Alert["severity"]) ?? "info",
+    alert_type: String(v.type ?? "unknown"),
+    message: String(v.msg ?? ""),
+    created_at:
+      typeof v.ts === "number" && v.ts > 1700000000
+        ? new Date(v.ts * 1000).toISOString()
+        : new Date().toISOString(),
+    resolved_at: v.resolved === true ? new Date().toISOString() : null,
+  }));
+  rows.sort((a, b) => +new Date(b.created_at) - +new Date(a.created_at));
+  return onlyOpen ? rows.filter((a) => !a.resolved_at) : rows;
 }
 
 export async function resolveAlert(id: string): Promise<void> {
-  if (DEMO_MODE || !supabase()) {
+  if (DEMO_MODE || !fbDb()) {
     demo.resolveAlert(id);
     return;
   }
-  const { error } = await supabase()!
-    .from("alerts")
-    .update({ resolved_at: new Date().toISOString() })
-    .eq("id", id);
-  if (error) throw new Error(error.message);
+  const { ref, update } = await import("firebase/database");
+  await update(ref(fbDb()!, devicePath("alerts", id)), {
+    resolved: true,
+    resolved_at: new Date().toISOString(),
+  });
 }
 
 /* ------------------------------------------------------------------ events */
 
 export async function getEvents(limit = 50): Promise<DeviceEvent[]> {
-  if (DEMO_MODE || !supabase()) return demo.events;
-  const { data, error } = await supabase()!
-    .from("device_events")
-    .select("*")
-    .eq("device_id", deviceId())
-    .order("created_at", { ascending: false })
-    .limit(limit);
-  if (error) throw new Error(error.message);
-  return (data ?? []) as DeviceEvent[];
+  if (DEMO_MODE || !fbDb()) return demo.events;
+  const { ref, get } = await import("firebase/database");
+  const snap = await get(ref(fbDb()!, devicePath("events")));
+  if (!snap.exists()) return [];
+  const val = snap.val() as Record<string, Record<string, unknown>>;
+  const rows: DeviceEvent[] = Object.entries(val).map(([key, v]) => ({
+    id: key,
+    device_id: deviceId(),
+    event_type: String(v.event ?? "unknown"),
+    details: (typeof v.details === "string" ? { info: v.details } : v.details ?? {}) as Record<string, unknown>,
+    created_at:
+      typeof v.ts === "number" && v.ts > 1700000000
+        ? new Date(v.ts * 1000).toISOString()
+        : new Date().toISOString(),
+  }));
+  rows.sort((a, b) => +new Date(b.created_at) - +new Date(a.created_at));
+  return rows.slice(0, limit);
 }
 
 /* ---------------------------------------------------------------- commands */
 
 /**
- * Queue a remote command. In real mode this inserts into `control_commands`
- * (RLS restricts to owner/operator), which the server-side ingestion path
- * forwards to the device over MQTT; the device replies on .../ack.
+ * Queue a remote command. In real mode this pushes a node under
+ * devices/{id}/commands; the firmware's RTDB stream picks it up, validates and
+ * executes it, writes an ack, then removes the node.
  */
 export async function sendCommand(
   type: CommandType,
   payload: Record<string, unknown>
 ): Promise<{ id: string; status: CommandStatus; note?: string }> {
-  if (DEMO_MODE || !supabase()) {
+  if (DEMO_MODE || !fbDb()) {
     const id = `cmd-${Date.now()}-${Math.random().toString(16).slice(2, 7)}`;
     applyDemoCommand(type, payload);
     return { id, status: "acknowledged", note: "demo device acknowledged" };
   }
 
-  const { data: auth } = await supabase()!.auth.getSession();
-  const { data, error } = await supabase()!
-    .from("control_commands")
-    .insert({
-      device_id: deviceId(),
-      command_type: type,
-      payload,
-      status: "pending",
-      created_by: auth.session?.user.id ?? null,
-    })
-    .select("id,status")
-    .single();
-  if (error) return { id: "", status: "failed", note: error.message };
-  return { id: data.id, status: data.status as CommandStatus };
+  const { ref, push, set } = await import("firebase/database");
+  const cmdRef = push(ref(fbDb()!, devicePath("commands")));
+  const body: Record<string, unknown> = {
+    cmd: type,
+    id: cmdRef.key,
+    created_at: new Date().toISOString(),
+    ...payload,
+  };
+  const { getCurrentUser } = await import("./firebase");
+  const user = await getCurrentUser();
+  if (user) body.created_by = user.uid;
+  await set(cmdRef, body);
+  return { id: cmdRef.key ?? "", status: "pending", note: "sent to device" };
 }
 
 function applyDemoCommand(type: CommandType, payload: Record<string, unknown>) {

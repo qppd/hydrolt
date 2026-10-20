@@ -1,17 +1,17 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { DEMO_MODE, DEVICE_ID, supabase } from "./supabase";
+import { DEMO_MODE, DEVICE_ID, fbDb } from "./firebase";
 import { DEMO_DEVICE_ID } from "./demo";
 
 /**
  * Device pairing ("connect to the machine").
  *
  * After signing in, the user connects to their controller by entering its
- * unique device ID (the UUID in public.devices, printed on the device label
- * and shown on the serial monitor at boot). The ID is verified against the
- * devices table (RLS-protected) and then stored in localStorage so every
- * page reads telemetry for the connected machine.
+ * unique device ID (configured as DEVICE_ID in HydroLT.ino and printed on the
+ * serial monitor at boot). The ID is verified against devices/{id}/info in
+ * the Realtime Database and then stored in localStorage so every page reads
+ * telemetry for that machine.
  *
  * In demo mode the simulated device is always connected.
  */
@@ -49,8 +49,7 @@ export function isPaired(): boolean {
 export async function pairDevice(rawId: string): Promise<PairedDevice> {
   const id = rawId.trim();
   if (!id) throw new Error("Enter the device ID.");
-  if (DEMO_MODE || !supabase()) {
-    // Demo: accept the simulated device ID (or anything — show the sim).
+  if (DEMO_MODE || !fbDb()) {
     const device: PairedDevice = {
       id: DEMO_DEVICE_ID,
       name: "Greenhouse Controller (simulated)",
@@ -61,18 +60,26 @@ export async function pairDevice(rawId: string): Promise<PairedDevice> {
     window.localStorage.setItem(STORAGE_KEY, device.id);
     return device;
   }
-  const { data, error } = await supabase()!
-    .from("devices")
-    .select("id,name,location,status,firmware_version")
-    .eq("id", id)
-    .maybeSingle();
-  if (error) throw new Error(error.message);
-  if (!data)
-    throw new Error(
-      "No device with that ID. Check the ID on the device label or serial monitor (115200 baud)."
-    );
-  window.localStorage.setItem(STORAGE_KEY, data.id);
-  return data as PairedDevice;
+  const { ref, get } = await import("firebase/database");
+  const snap = await get(ref(fbDb()!, `devices/${id}/info`));
+  if (!snap.exists()) {
+    // fall back: firmware may not have written /info yet — the node itself
+    // existing is enough proof the device is registered
+    const root = await get(ref(fbDb()!, `devices/${id}`));
+    if (!root.exists())
+      throw new Error(
+        "No device with that ID. Check the ID in the serial monitor at boot (115200 baud)."
+      );
+  }
+  const info = snap.val() ?? {};
+  window.localStorage.setItem(STORAGE_KEY, id);
+  return {
+    id,
+    name: info.name ?? null,
+    location: info.location ?? null,
+    status: info.status ?? null,
+    firmware_version: info.firmware_version ?? null,
+  };
 }
 
 /** Forget the connected device (must connect again to see data). */

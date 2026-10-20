@@ -174,11 +174,13 @@ Use an architecture that is maintainable, economical, and achievable within the 
 
 - **Device firmware:** ESP32 with non-blocking sensor acquisition, automation rules,
   local safety checks, and watchdog recovery.
-- **Communication:** Wi-Fi using MQTT or HTTPS. MQTT is a good choice for telemetry and
-  commands if a broker can be deployed reliably.
+- **Communication:** Wi-Fi. Telemetry and commands flow through the Firebase
+  Realtime Database — the device opens outbound TLS connections only, so no broker
+  or public endpoint needs hosting.
 - **Web application:** Next.js with TypeScript and a responsive interface.
-- **Backend/database:** Supabase for authentication, PostgreSQL storage, and real-time
-  dashboard updates, subject to the hosting and connectivity plan.
+- **Backend/database:** Firebase for authentication (Email/Password), Realtime
+  Database storage, and real-time dashboard updates, subject to the hosting and
+  connectivity plan.
 - **Device security:** Authenticated commands, per-device credentials, input validation,
   and no direct public exposure of ESP32 control endpoints.
 - **Offline behavior:** Essential automation must continue locally when internet access or
@@ -186,30 +188,33 @@ Use an architecture that is maintainable, economical, and achievable within the 
 
 ## 6. Recommended database schema
 
-For a Supabase implementation, use the following core tables.
+For the Firebase Realtime Database implementation, use the following core nodes.
 
-| Table | Important fields | Purpose |
+| Node | Important fields | Purpose |
 |---|---|---|
-| `profiles` | `id`, `full_name`, `role` | User accounts and permissions |
-| `devices` | `id`, `name`, `device_key_hash`, `status`, `last_seen_at` | ESP32 registration and connectivity |
-| `sensor_readings` | `id`, `device_id`, `recorded_at`, `ph`, `ec`, `temperature`, `humidity`, `flow_rate`, `npk_n`, `npk_p`, `npk_k` | Historical sensor data |
-| `device_states` | `id`, `device_id`, `pump_on`, `fan_on`, `misting_on`, `dosing_a_on`, `dosing_b_on`, `dosing_n_on`, `dosing_p_on`, `dosing_k_on`, `mode`, `updated_at` | Current operating state |
-| `control_settings` | `device_id`, `ph_min`, `ph_max`, `ec_min`, `ec_max`, `temperature_setpoint`, `humidity_limit`, `min_flow_rate`, `npk_n_min/max`, `npk_p_min/max`, `npk_k_min/max`, `npk_dosing_max_runtime_s`, `npk_dose_cooldown_s`, `npk_dosing_enabled` | Configurable automation settings |
-| `control_commands` | `id`, `device_id`, `command_type`, `payload`, `status`, `created_at`, `executed_at` | Remote commands and execution tracking |
-| `dosing_logs` | `id`, `device_id`, `pump_id`, `duration_ms`, `estimated_volume_ml`, `result`, `created_at` | Nutrient dosing history |
-| `alerts` | `id`, `device_id`, `severity`, `alert_type`, `message`, `created_at`, `resolved_at` | Fault and warning records |
-| `device_events` | `id`, `device_id`, `event_type`, `details`, `created_at` | Reboots, sensor failures, and operating events |
+| `users/{uid}` | `email`, `role` | User accounts and permissions |
+| `devices/{id}/info` | `name`, `location`, `firmware_version` | ESP32 registration |
+| `devices/{id}/status` | `"online"` / `"offline"` | Device connectivity |
+| `devices/{id}/telemetry` | `ts`, `ph`, `ec`, `temp`, `hum`, `flow`, `npk_n`, `npk_p`, `npk_k`, `flags` | Latest sensor sample |
+| `devices/{id}/history/{pushKey}` | same as telemetry | Historical sensor data |
+| `devices/{id}/state` | `pump`, `fan`, `misting`, `doseA/B/N/P/K`, `mode`, `doseState`, `updated_at` | Current operating state |
+| `devices/{id}/settings` | `ph_min/max`, `ec_min/max`, `temperature_setpoint`, `humidity_limit`, `min_flow_rate`, `npk_*_min/max`, `npk_dosing_max_runtime_s`, `npk_dose_cooldown_s`, `npk_dosing_enabled` | Configurable automation settings |
+| `devices/{id}/commands/{pushKey}` | `cmd`, `value`, `duration_ms`, `settings`, `id`, `created_by` | Remote commands (self-clearing queue) |
+| `devices/{id}/acks/{pushKey}` | `cmd_id`, `status`, `note`, `ts` | Command execution tracking |
+| `devices/{id}/alerts/{pushKey}` | `severity`, `type`, `msg`, `ts`, `resolved` | Fault and warning records |
+| `devices/{id}/events/{pushKey}` | `event`, `details`, `ts` | Reboots, sensor failures, and operating events |
 
 **Implementation requirements**
 
-- Use UUID primary keys, foreign keys, timestamps, and appropriate indexes.
-- Enable Supabase Row Level Security (RLS) on all exposed tables.
+- Use push keys for append-only lists and epoch timestamps for ordering.
+- Enforce Realtime Database **security rules** on every exposed node (see
+  database-schema.md §2).
 - Restrict configuration changes and device commands to authorized users.
-- Use a server-side or trusted device-ingestion path for credentials and privileged
-  operations.
-- Add retention policies or scheduled cleanup for high-volume telemetry if necessary.
+- Devices sign in with their own Firebase Auth account; never embed database
+  secrets or Wi-Fi credentials in the database.
+- Bound data volume with retention (the firmware prunes `history` on-device).
 - Do not store secrets, Wi-Fi passwords, or plaintext device credentials in public
-  database tables.
+  database nodes.
 
 ## 7. Electrical and solar requirements
 
