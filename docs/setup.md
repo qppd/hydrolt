@@ -20,7 +20,7 @@ How to build, configure, and run both halves of the project.
 ## 2. Repository structure
 
 ```
-hydrolt/
+hydrolyt/
 ├── README.md
 ├── docs/
 ├── src/

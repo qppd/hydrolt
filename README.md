@@ -163,7 +163,7 @@ Full pin map and wiring: [docs/setup.md](docs/setup.md).
 ## Project Structure
 
 ```
-hydrolt/
+hydrolyt/
 ├── README.md                     ← this file
 ├── LICENSE                       ← MIT
 ├── docs/                         ← project documentation

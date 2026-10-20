@@ -16,7 +16,7 @@ import { DEMO_DEVICE_ID } from "./demo";
  * In demo mode the simulated device is always connected.
  */
 
-const STORAGE_KEY = "hydrolt.deviceId";
+const STORAGE_KEY = "hydrolyt.deviceId";
 
 export interface PairedDevice {
   id: string;
