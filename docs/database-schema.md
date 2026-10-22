@@ -20,7 +20,7 @@ Design rules applied throughout:
 
 ## 1. Tree layout
 
-`{deviceId}` is the `DEVICE_ID` constant configured in `HydroLT.ino` (e.g. `hydro-01`).
+`{deviceId}` is the `DEVICE_ID` constant configured in `config.h` (e.g. `hydro-01`).
 
 ```
 devices/

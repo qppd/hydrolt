@@ -122,12 +122,15 @@ npm run typecheck # tsc --noEmit
 
 ### 2. ESP32 firmware (`src/esp/HydroLT`)
 
-1. Open `src/esp/HydroLT/HydroLT.ino` in the Arduino IDE (or PlatformIO).
+1. Open `src/esp/HydroLT/HydroLT.ino` in the Arduino IDE (or PlatformIO). The
+   sketch is split into modules (`config.h`, `sensors.*`, `npk.*`, `automation.*`,
+   `firebase_db.*`, `commands.*`, …) — the IDE compiles them automatically as long
+   as the whole folder is kept together.
 2. Install the board support **esp32 by Espressif Systems** and the libraries:
    - `Firebase Arduino Client Library for ESP8266 and ESP32` (Mobizt)
    - `DHT sensor library` (Adafruit) + `Adafruit Unified Sensor`
    - `ArduinoJson` (Benoit Blanchon)
-   - *(the RS485 NPK probe needs no extra library — a Modbus RTU master is built into the sketch)*
+   - *(the RS485 NPK probe needs no extra library — a Modbus RTU master is built into the firmware)*
 3. Copy `secrets.h.example` to `secrets.h` (git-ignored) and set `HYDRO_WIFI_SSID`,
    `HYDRO_WIFI_PASS`, `HYDRO_FB_API_KEY`, `HYDRO_FB_DB_URL`, `HYDRO_FB_EMAIL`,
    `HYDRO_FB_PASSWORD`, `HYDRO_DEVICE_ID`, plus pin assignments for your actual wiring.
@@ -174,8 +177,13 @@ hydrolyt/
 │   └── setup.md                  ← firmware & web app setup guide
 └── src/
     ├── esp/
-    │   └── HydroLT/
-    │       └── HydroLT.ino       ← ESP32 controller firmware (Arduino)
+    │   └── HydroLT/              ← ESP32 controller firmware (modular Arduino sketch)
+    │       ├── HydroLT.ino       ← setup() + loop() entry point
+    │       ├── config.h          ← pins, limits, timings, credential macros
+    │       ├── sensors.* npk.*   ← pH/EC/climate/flow and RS485 NPK probe
+    │       ├── actuators.* automation.*        ← relays and control loops
+    │       ├── firebase_db.* commands.* connectivity.*  ← RTDB, commands, session
+    │       └── state.* types.h util.* logging.* settings_store.*  ← support modules
     └── webapp/
         └── HydroLT/              ← Next.js + TypeScript web application
             ├── app/              ← App Router pages (dashboard, history, controls, alerts)

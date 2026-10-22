@@ -23,7 +23,21 @@ hydrolyt/
 ├── README.md
 ├── docs/
 ├── src/
-│   ├── esp/HydroLT/HydroLT.ino
+│   ├── esp/HydroLT/             ← modular Arduino sketch
+│   │   ├── HydroLT.ino          ← setup() + loop() only
+│   │   ├── config.h             ← pins, limits, timings, credentials macros
+│   │   ├── types.h              ← shared data types
+│   │   ├── state.h / .cpp       ← shared runtime state
+│   │   ├── util.h / .cpp        ← numeric helpers + Modbus CRC
+│   │   ├── logging.h / .cpp     ← serial log helper
+│   │   ├── settings_store.*     ← NVS settings persistence
+│   │   ├── sensors.*            ← pH / EC / DHT22 / flow
+│   │   ├── npk.*                ← RS485 Modbus RTU NPK probe
+│   │   ├── actuators.*          ← relays, safety stops
+│   │   ├── automation.*         ← dosing, flow, climate loops
+│   │   ├── firebase_db.*        ← RTDB publishing
+│   │   ├── commands.*           ← remote command handling
+│   │   └── connectivity.*       ← Wi-Fi / Firebase session upkeep
 │   └── webapp/HydroLT/          ← Next.js + TypeScript app
 ```
 
@@ -117,7 +131,24 @@ npm start
 
 ## 4. ESP32 firmware
 
-File: [`src/esp/HydroLT/HydroLT.ino`](../src/esp/HydroLT/HydroLT.ino)
+Sketch folder: [`src/esp/HydroLT`](../src/esp/HydroLT) — `HydroLT.ino` holds only
+`setup()` and `loop()`; each component lives in its own `.cpp` / `.h` pair:
+
+| Module | Responsibility |
+|---|---|
+| `config.h` | Pin map, default thresholds, validity windows, calibration, timings, credential macros |
+| `types.h` | `Settings`, `SensorData`, `ActuatorState`, dosing/poll enums |
+| `state.*` | One definition point for every shared global (`cfg`, `sens`, `act`, timers, Firebase handles) |
+| `util.*` | `medianOf`, `validRange`, `medianSmooth`, Modbus CRC-16 |
+| `logging.*` | Timestamped serial log lines |
+| `settings_store.*` | Load/save settings and AUTO/MANUAL mode in NVS (Preferences) |
+| `sensors.*` | pH, EC, DHT22 and flow acquisition with median smoothing |
+| `npk.*` | Non-blocking Modbus RTU master for the RS485 NPK probe |
+| `actuators.*` | Relay helpers, fail-safe stops, single-dose-channel rule |
+| `automation.*` | Nutrient dosing, water-flow and climate control loops |
+| `firebase_db.*` | Telemetry, history archive + pruning, state, settings, alerts, events |
+| `commands.*` | Command stream, validation, execution, acknowledgements |
+| `connectivity.*` | Wi-Fi association and Firebase sign-in / stream reattach |
 
 ### 4.1 Libraries
 
@@ -129,7 +160,7 @@ File: [`src/esp/HydroLT/HydroLT.ino`](../src/esp/HydroLT/HydroLT.ino)
 | ArduinoJson | Benoit Blanchon | ✔ **v7.x required** (`JsonDocument` API) |
 
 The NPK probe needs **no extra library** — a small Modbus RTU master (function 0x03,
-CRC-16) runs on UART2 through a MAX485 transceiver, driven by the sketch itself.
+CRC-16) runs on UART2 through a MAX485 transceiver, driven by `npk.cpp`.
 
 ### 4.1b NPK probe (RS485 / MAX485)
 
@@ -166,7 +197,7 @@ Copy-Item secrets.h.example secrets.h
 #define HYDRO_DEVICE_ID     "hydro-01"               // unique machine ID for the web app
 ```
 
-`HydroLT.ino` includes `secrets.h` when present and otherwise falls back to the
+`config.h` includes `secrets.h` when present and otherwise falls back to the
 placeholders, so a fresh clone compiles without secrets and the public repo never
 contains Wi-Fi or Firebase credentials.
 
@@ -176,7 +207,7 @@ Authentication → Users). Never put a database secret in the firmware.
 Then set the pin map to match the actual wiring (see §6) and the default control
 thresholds (`DEFAULT_PH_MIN`, `DEFAULT_TEMP_SETPOINT`, `DEFAULT_MIN_FLOW`, ...).
 
-For NPK, review the `NPK_*` block near the top of the sketch: `NPK_ENABLED`,
+For NPK, review the `NPK_*` block in `config.h`: `NPK_ENABLED`,
 `PIN_NPK_RX`/`PIN_NPK_TX`/`PIN_NPK_DE`, `NPK_BAUD`, `NPK_SLAVE_ADDR`, and the
 `DEFAULT_NPK_*` target bands, burst cap and cooldown. **The default NPK bands are
 placeholders** — set them to the values your probe reports (units, method and
