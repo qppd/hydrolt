@@ -217,7 +217,12 @@ export async function getSettings(): Promise<ControlSettings> {
   const { ref, get } = await import("firebase/database");
   const snap = await get(ref(fbDb()!, devicePath("settings")));
   if (!snap.exists()) return defaultSettings();
-  return { ...defaultSettings(), ...(snap.val() as Partial<ControlSettings>) };
+  const merged = { ...defaultSettings(), ...(snap.val() as Partial<ControlSettings>) };
+  // the firmware stores the NPK kill switch as 1/0 — normalise for the UI
+  merged.npk_dosing_enabled =
+    (merged.npk_dosing_enabled as unknown) === true ||
+    (merged.npk_dosing_enabled as unknown) === 1;
+  return merged;
 }
 
 export async function saveSettings(patch: Partial<ControlSettings>): Promise<ControlSettings> {

@@ -54,20 +54,49 @@
 // 1. CONFIGURATION  — edit for your installation
 // ===========================================================================
 
+// --- Credentials ------------------------------------------------------------
+// Real values live in secrets.h (git-ignored — copy secrets.h.example and fill
+// it in). The placeholders below are what a fresh clone compiles with, so the
+// public repo never contains Wi-Fi or Firebase credentials.
+#if __has_include("secrets.h")
+  #include "secrets.h"
+#endif
+
+#ifndef HYDRO_WIFI_SSID
+  #define HYDRO_WIFI_SSID "YOUR_WIFI_SSID"
+#endif
+#ifndef HYDRO_WIFI_PASS
+  #define HYDRO_WIFI_PASS "YOUR_WIFI_PASSWORD"
+#endif
+#ifndef HYDRO_FB_API_KEY
+  #define HYDRO_FB_API_KEY "YOUR_WEB_API_KEY"
+#endif
+#ifndef HYDRO_FB_DB_URL
+  #define HYDRO_FB_DB_URL "https://YOUR_PROJECT-default-rtdb.firebaseio.com"
+#endif
+#ifndef HYDRO_FB_EMAIL
+  #define HYDRO_FB_EMAIL "device-hydro-01@your-project.example.com"
+#endif
+#ifndef HYDRO_FB_PASSWORD
+  #define HYDRO_FB_PASSWORD "YOUR_DEVICE_PASSWORD"
+#endif
+#ifndef HYDRO_DEVICE_ID
+  #define HYDRO_DEVICE_ID "hydro-01"
+#endif
+
 // --- Wi-Fi -----------------------------------------------------------------
-static const char* WIFI_SSID     = "YOUR_WIFI_SSID";
-static const char* WIFI_PASS     = "YOUR_WIFI_PASSWORD";
+static const char* WIFI_SSID     = HYDRO_WIFI_SSID;
+static const char* WIFI_PASS     = HYDRO_WIFI_PASS;
 static const uint32_t WIFI_RETRY_MS = 15000UL;   // reconnect attempt interval
 
 // --- Firebase ---------------------------------------------------------------
-// Project settings (Firebase console → Project settings → General, and
-// Realtime Database). The device signs in with its own email/password
-// account (Authentication → Users) — never put a database secret here.
-static const char* FB_API_KEY   = "YOUR_WEB_API_KEY";
-static const char* FB_DB_URL    = "https://YOUR_PROJECT-default-rtdb.firebaseio.com";
-static const char* FB_EMAIL     = "device-hydro-01@your-project.example.com";
-static const char* FB_PASSWORD  = "YOUR_DEVICE_PASSWORD";
-static const char* DEVICE_ID    = "hydro-01";   // unique machine ID shown in the web app
+// The device signs in with its own email/password account (Authentication →
+// Users) — never put a database secret here.
+static const char* FB_API_KEY   = HYDRO_FB_API_KEY;
+static const char* FB_DB_URL    = HYDRO_FB_DB_URL;
+static const char* FB_EMAIL     = HYDRO_FB_EMAIL;
+static const char* FB_PASSWORD  = HYDRO_FB_PASSWORD;
+static const char* DEVICE_ID    = HYDRO_DEVICE_ID;   // unique machine ID shown in the web app
 static const uint32_t FB_RETRY_MS   = 5000UL;   // reconnect attempt interval
 static const uint32_t TELEMETRY_MS  = 5000UL;   // telemetry write interval
 

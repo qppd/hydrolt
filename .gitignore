@@ -15,6 +15,11 @@ desktop.ini
 .env.*.local
 *.pem
 *.key
+secrets.h
+!secrets.h.example
+*-firebase-adminsdk-*.json
+*service-account*.json
+serviceAccountKey*.json
 
 # ---- Node / Next.js ----
 node_modules/

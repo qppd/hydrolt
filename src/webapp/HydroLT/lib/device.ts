@@ -17,6 +17,12 @@ import { DEMO_DEVICE_ID } from "./demo";
  */
 
 const STORAGE_KEY = "hydrolyt.deviceId";
+const CHANGE_EVENT = "hydrolyt:devicechange";
+
+/** Tell every mounted hook instance that the paired device changed. */
+function notifyDeviceChange() {
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(CHANGE_EVENT));
+}
 
 export interface PairedDevice {
   id: string;
@@ -58,6 +64,7 @@ export async function pairDevice(rawId: string): Promise<PairedDevice> {
       firmware_version: "0.1.0-demo",
     };
     window.localStorage.setItem(STORAGE_KEY, device.id);
+    notifyDeviceChange();
     return device;
   }
   const { ref, get } = await import("firebase/database");
@@ -73,6 +80,7 @@ export async function pairDevice(rawId: string): Promise<PairedDevice> {
   }
   const info = snap.val() ?? {};
   window.localStorage.setItem(STORAGE_KEY, id);
+  notifyDeviceChange();
   return {
     id,
     name: info.name ?? null,
@@ -84,7 +92,9 @@ export async function pairDevice(rawId: string): Promise<PairedDevice> {
 
 /** Forget the connected device (must connect again to see data). */
 export function unpairDevice(): void {
-  if (typeof window !== "undefined") window.localStorage.removeItem(STORAGE_KEY);
+  if (typeof window === "undefined") return;
+  window.localStorage.removeItem(STORAGE_KEY);
+  notifyDeviceChange();
 }
 
 /** React hook: connected device + pair/unpair with re-render. */
@@ -93,8 +103,17 @@ export function usePairedDevice() {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    setDeviceId(getPairedDeviceId());
+    const sync = () => setDeviceId(getPairedDeviceId());
+    sync();
     setReady(true);
+    // pairing happens on /connect while the layout stays mounted — listen for
+    // our own event (same tab) and for `storage` (other tabs)
+    window.addEventListener(CHANGE_EVENT, sync);
+    window.addEventListener("storage", sync);
+    return () => {
+      window.removeEventListener(CHANGE_EVENT, sync);
+      window.removeEventListener("storage", sync);
+    };
   }, []);
 
   const pair = useCallback(async (rawId: string) => {

@@ -148,17 +148,27 @@ datasheet, and use a level/RS485-compatible module rated for it).
 
 ### 4.2 Configure
 
-Edit the top of `HydroLT.ino`:
+Copy the credential template and fill in your values:
+
+```powershell
+cd src\esp\HydroLT
+Copy-Item secrets.h.example secrets.h
+```
 
 ```cpp
-const char* WIFI_SSID = "YOUR_SSID";
-const char* WIFI_PASS = "YOUR_PASSWORD";
-const char* FB_API_KEY  = "YOUR_WEB_API_KEY";       // Firebase project settings
-const char* FB_DB_URL   = "https://<project>-default-rtdb.firebaseio.com";
-const char* FB_EMAIL    = "device-hydro-01@your-project.example.com";
-const char* FB_PASSWORD = "YOUR_DEVICE_PASSWORD";   // dedicated device account
-const char* DEVICE_ID   = "hydro-01";               // unique machine ID for the web app
+// secrets.h — git-ignored, never committed
+#define HYDRO_WIFI_SSID     "YOUR_SSID"
+#define HYDRO_WIFI_PASS     "YOUR_PASSWORD"
+#define HYDRO_FB_API_KEY    "YOUR_WEB_API_KEY"       // Firebase project settings
+#define HYDRO_FB_DB_URL     "https://<project>-default-rtdb.firebaseio.com"
+#define HYDRO_FB_EMAIL      "device-hydro-01@your-project.example.com"
+#define HYDRO_FB_PASSWORD   "YOUR_DEVICE_PASSWORD"   // dedicated device account
+#define HYDRO_DEVICE_ID     "hydro-01"               // unique machine ID for the web app
 ```
+
+`HydroLT.ino` includes `secrets.h` when present and otherwise falls back to the
+placeholders, so a fresh clone compiles without secrets and the public repo never
+contains Wi-Fi or Firebase credentials.
 
 The device signs into Firebase with its **own email/password account** (create it in
 Authentication → Users). Never put a database secret in the firmware.

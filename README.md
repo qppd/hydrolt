@@ -128,7 +128,9 @@ npm run typecheck # tsc --noEmit
    - `DHT sensor library` (Adafruit) + `Adafruit Unified Sensor`
    - `ArduinoJson` (Benoit Blanchon)
    - *(the RS485 NPK probe needs no extra library — a Modbus RTU master is built into the sketch)*
-3. Set `WIFI_SSID`, `WIFI_PASS`, `FB_API_KEY`, `FB_DB_URL`, `FB_EMAIL`, `FB_PASSWORD`, `DEVICE_ID`, and pin assignments for your actual wiring.
+3. Copy `secrets.h.example` to `secrets.h` (git-ignored) and set `HYDRO_WIFI_SSID`,
+   `HYDRO_WIFI_PASS`, `HYDRO_FB_API_KEY`, `HYDRO_FB_DB_URL`, `HYDRO_FB_EMAIL`,
+   `HYDRO_FB_PASSWORD`, `HYDRO_DEVICE_ID`, plus pin assignments for your actual wiring.
 4. Select **ESP32 Dev Module**, compile, upload.
 5. Serial monitor at **115200 baud** for boot and diagnostic logs.
 
