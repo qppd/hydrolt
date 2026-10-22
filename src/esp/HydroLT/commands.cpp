@@ -209,6 +209,11 @@ void handleCommand(const char* payload, unsigned int length) {
 
 // --- RTDB command stream ----------------------------------------------------
 
+// Set from the library's timeout callback and serviced from the main loop —
+// the library must never be re-entered from its own callback context.
+static volatile bool cmdStreamLost = false;
+static uint32_t lastStreamReattachMs = 0;
+
 static void cmdStreamCallback(FirebaseStream data) {
   if (data.dataTypeEnum() == fb_esp_rtdb_data_type_json) {
     cmdPayloadBuf = data.payload();
@@ -217,19 +222,49 @@ static void cmdStreamCallback(FirebaseStream data) {
 }
 
 static void cmdStreamTimeoutCallback(bool timeout) {
-  if (timeout) logLine("RTDB command stream timed out — will reattach");
+  if (timeout) {
+    cmdStreamLost = true;
+    logLine("RTDB command stream timed out — will reattach");
+  }
 }
 
 void commandsBeginStream() {
+  // BearSSL defaults are 2048 rx / 512 tx, too small for the records Google's
+  // endpoints send when a stream is re-established. When one does not fit, the
+  // engine latches BR_ERR_TOO_LARGE and every later read logs "closed SSL
+  // connection" / "Incoming record is too large ... handshake" — the stream
+  // then never comes back and remote commands stop arriving.
+  fbdoCmdStream.setBSSLBufferSize(4096, 2048);
+
   Firebase.RTDB.beginStream(&fbdoCmdStream, DB_PATH("commands"));
   Firebase.RTDB.setStreamCallback(&fbdoCmdStream, cmdStreamCallback, cmdStreamTimeoutCallback);
+
+  cmdStreamLost = false;
+  lastStreamReattachMs = millis();
 }
 
 void commandsStreamTick() {
-  if (!Firebase.RTDB.readStream(&fbdoCmdStream) && fbdoCmdStream.streamTimeout()) {
-    logLine("RTDB stream reattach");
-    commandsBeginStream();
-  }
+  if (!Firebase.ready()) return;
+
+  // Drives the library's keep-alive / automatic reconnect handling and
+  // dispatches the callbacks above.
+  Firebase.RTDB.readStream(&fbdoCmdStream);
+
+  if (!cmdStreamLost) return;
+  cmdStreamLost = false;
+
+  // httpCode() is 200 when the library already re-established the stream by
+  // itself (the usual idle keep-alive reconnect); anything else means the
+  // socket is dead and only a fresh handshake will bring it back.
+  if (fbdoCmdStream.httpCode() == 200) return;
+
+  uint32_t now = millis();
+  if (now - lastStreamReattachMs < STREAM_REATTACH_MS) return;
+  lastStreamReattachMs = now;
+
+  logLine("RTDB stream reattach");
+  Firebase.RTDB.endStream(&fbdoCmdStream);   // tear down the broken TLS session first
+  commandsBeginStream();
 }
 
 void processPendingCommands() {

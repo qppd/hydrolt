@@ -57,6 +57,7 @@ static const char* FB_PASSWORD  = HYDRO_FB_PASSWORD;
 static const char* DEVICE_ID    = HYDRO_DEVICE_ID;   // unique machine ID shown in the web app
 static const uint32_t FB_RETRY_MS   = 5000UL;   // reconnect attempt interval
 static const uint32_t TELEMETRY_MS  = 5000UL;   // telemetry write interval
+static const uint32_t STREAM_REATTACH_MS = 60000UL; // min gap between command-stream reattaches
 
 // RTDB layout for this device:
 //   devices/{deviceId}/telemetry   ← latest sensor sample (overwritten)
