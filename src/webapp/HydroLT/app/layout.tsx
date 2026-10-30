@@ -17,7 +17,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <footer className="site">
           HYDROLYT · IoT vertical hydroponic system · Cucumis melo (melon)
           <br />
-          pH and EC support nutrient management — they do not measure individual NPK concentrations.
         </footer>
       </body>
     </html>
