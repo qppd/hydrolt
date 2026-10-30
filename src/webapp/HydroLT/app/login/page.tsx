@@ -2,11 +2,13 @@
 
 import { useState } from "react";
 import Badge from "@/components/Badge";
+import { useAuth } from "@/hooks/useAuth";
 import { DEMO_MODE, signIn, signOut, signUp } from "@/lib/firebase";
 
 type Mode = "signin" | "signup";
 
 export default function LoginPage() {
+  const { user } = useAuth();
   const [mode, setMode] = useState<Mode>("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -61,7 +63,7 @@ export default function LoginPage() {
         </Badge>
       </div>
 
-      <section className="grid grid-2">
+      <section className="grid grid-1">
         <form className="card" onSubmit={submit}>
           <header className="card-head">
             <h2>{mode === "signup" ? "Sign up" : "Account"}</h2>
@@ -116,9 +118,11 @@ export default function LoginPage() {
                 ? mode === "signup" ? "Creating account…" : "Signing in…"
                 : mode === "signup" ? "Create account" : "Sign in"}
             </button>
-            <button className="btn" type="button" onClick={() => signOut()}>
-              Sign out
-            </button>
+            {user ? (
+              <button className="btn" type="button" onClick={() => signOut()}>
+                Sign out
+              </button>
+            ) : null}
           </div>
           {message ? <p className="notice" style={{ marginTop: 14 }}>{message}</p> : null}
 
@@ -129,31 +133,6 @@ export default function LoginPage() {
           </p>
         </form>
 
-        <div className="card">
-          <header className="card-head">
-            <h2>Access control (FR-12)</h2>
-          </header>
-          <dl className="kv">
-            <dt>Provider</dt>
-            <dd>Firebase Auth (email / password)</dd>
-            <dt>Roles</dt>
-            <dd>owner · operator · viewer</dd>
-            <dt>Enforcement</dt>
-            <dd>Realtime Database security rules + device-side validation</dd>
-            <dt>Device sign-in</dt>
-            <dd>own Firebase account per device</dd>
-          </dl>
-          <p className="hint">
-            After signing in you&apos;ll connect to your machine by entering its unique
-            device ID (shown on the device label and on the serial monitor at boot).
-          </p>
-          <p className="hint">
-            The ESP32 never exposes a public control endpoint: commands travel
-            app → <span className="mono">devices/&#123;id&#125;/commands</span> (RTDB, security
-            rules enforced) → device stream → validated execution, and the device
-            acknowledges every command.
-          </p>
-        </div>
       </section>
     </>
   );
