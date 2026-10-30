@@ -22,7 +22,7 @@ export const DEMO_MODE = forceDemo || !cfg.apiKey || !cfg.databaseURL;
 
 /** Fallback device ID used before the user connects a device (demo/kiosk). */
 export const DEVICE_ID =
-  process.env.NEXT_PUBLIC_DEVICE_ID ?? "hydro-demo-01";
+  process.env.NEXT_PUBLIC_DEVICE_ID || "hydro-demo-01";
 
 let app: FirebaseApp | null = null;
 let auth: Auth | null = null;

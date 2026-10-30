@@ -43,8 +43,9 @@ export default function LoginPage() {
       setMessage(error.message);
       return;
     }
-    setMessage("Signed in. Opening Connect so you can link your device...");
-    router.push("/connect");
+    // RequireAuth routes to /connect when the account has no linked device,
+    // or straight to the dashboard when the pairing is remembered.
+    router.push("/");
   }
 
   async function handleResend() {
