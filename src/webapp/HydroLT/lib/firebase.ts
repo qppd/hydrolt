@@ -171,3 +171,49 @@ export async function setUserActive(uid: string, active: boolean): Promise<void>
   const { ref, update } = await import("firebase/database");
   await update(ref(d, `users/${uid}`), { active });
 }
+
+/** Get UIDs of users linked to a device. */
+export async function getUserIdsForDevice(deviceId: string): Promise<string[]> {
+  const d = fbDb();
+  if (!d) return [];
+  const { ref, get } = await import("firebase/database");
+  const snap = await get(ref(d, `devices/${deviceId}/users`));
+  if (!snap.exists()) return [];
+  return Object.keys(snap.val() as Record<string, unknown>);
+}
+
+/** List all users connected to a specific device (owner only). */
+export async function listUsersForDevice(deviceId: string): Promise<UserRecord[]> {
+  const d = fbDb();
+  if (!d) return [];
+  const { ref, get } = await import("firebase/database");
+
+  const userSnap = await get(ref(d, `devices/${deviceId}/users`));
+  if (!userSnap.exists()) return [];
+
+  const uidList = Object.keys(userSnap.val() as Record<string, unknown>);
+  if (uidList.length === 0) return [];
+
+  const promises = uidList.map(async (uid) => {
+    const [roleSnap, activeSnap, emailSnap] = await Promise.all([
+      get(ref(d, `users/${uid}/role`)),
+      get(ref(d, `users/${uid}/active`)),
+      get(ref(d, `users/${uid}/email`)),
+    ]);
+    return {
+      uid,
+      email: emailSnap.exists() ? String(emailSnap.val()) : "",
+      role: roleSnap.exists() ? (roleSnap.val() as UserRole) : "viewer",
+      active: activeSnap.exists() ? activeSnap.val() !== false : true,
+      created_at: "",
+    };
+  });
+
+  const results = await Promise.all(promises);
+  results.sort((a, b) => {
+    if (a.role === "owner" && b.role !== "owner") return -1;
+    if (b.role === "owner" && a.role !== "owner") return 1;
+    return a.email.localeCompare(b.email);
+  });
+  return results;
+}

@@ -235,3 +235,43 @@ Idempotent setup for a fresh project:
    check treats an existing `devices/{deviceId}` node as proof the device is
    registered, so creating `info` at provision time is enough.
 4. Set `users/{uid}/role` to `owner` for administrators (console edit).
+## 5. Device-user relationships
+
+Users connect to devices through the `/connect` page. Each device tracks its
+paired users under `devices/{deviceId}/users/{uid}`:
+
+```
+devices/
+└── {deviceId}/
+    ├── users/                    ← linked users (owner-only access)
+    │   └── {uid}/
+    │       ├── linked_at: "2026-10-30T..."
+    │       └── role: "owner"     ← inherited from /users/{uid}/role
+```
+
+When a user pairs a device for the first time, they automatically become the
+**owner** of that device. Additional users who pair the same device are created
+as **viewer** by default — the owner can elevate them in the User Management page.
+
+When a user disconnects, their entry is removed from `devices/{id}/users/`,
+revoking their access to that device's data.
+
+### Security rules for device-user access
+
+```json
+{
+  "rules": {
+    "devices": {
+      "$deviceId": {
+        "users": {
+          ".read": "auth != null && root.child('devices').child($deviceId).child('info').exists()",
+          "$uid": {
+            ".read": "auth != null && (root.child('users').child(auth.uid).child('role').val() === 'owner')",
+            ".write": "false"  // only app code writes here via pairDevice/unpairDevice
+          }
+        }
+      }
+    }
+  }
+}
+```

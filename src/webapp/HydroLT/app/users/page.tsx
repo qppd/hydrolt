@@ -5,9 +5,10 @@ import { useRouter } from "next/navigation";
 import Badge from "@/components/Badge";
 import { useAuth } from "@/hooks/useAuth";
 import { useRole } from "@/hooks/useRole";
+import { usePairedDevice } from "@/lib/device";
 import {
   DEMO_MODE,
-  listUsers,
+  listUsersForDevice,
   setUserRole,
   setUserActive,
 } from "@/lib/firebase";
@@ -19,13 +20,13 @@ export default function UsersPage() {
   const router = useRouter();
   const { user, loading: authLoading } = useAuth();
   const { isOwner, loading: roleLoading } = useRole();
+  const { deviceId } = usePairedDevice();
 
   const [users, setUsers] = useState<UserRecord[]>([]);
-  const [busy, setBusy] = useState<string | null>(null); // uid being modified
+  const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
 
-  // Guard: only owners can see this page
   useEffect(() => {
     if (authLoading || roleLoading) return;
     if (!user) {
@@ -38,21 +39,15 @@ export default function UsersPage() {
     }
   }, [user, authLoading, isOwner, roleLoading, router]);
 
-  // Load user list
   useEffect(() => {
-    if (!isOwner || authLoading || roleLoading) return;
+    if (!isOwner || authLoading || roleLoading || !deviceId || DEMO_MODE) return;
     loadUsers();
-  }, [isOwner, authLoading, roleLoading]);
+  }, [isOwner, authLoading, roleLoading, deviceId, DEMO_MODE]);
 
   async function loadUsers() {
+    if (!deviceId) return;
     try {
-      const list = await listUsers();
-      // Sort: owners first, then by email
-      list.sort((a, b) => {
-        if (a.role === "owner" && b.role !== "owner") return -1;
-        if (b.role === "owner" && a.role !== "owner") return 1;
-        return a.email.localeCompare(b.email);
-      });
+      const list = await listUsersForDevice(deviceId);
       setUsers(list);
       setLoaded(true);
     } catch (e) {
@@ -106,8 +101,8 @@ export default function UsersPage() {
         <div>
           <h1>User management</h1>
           <p>
-            Manage accounts registered on HydroLT. Change roles (owner, operator,
-            viewer) or deactivate users to revoke access.
+            Manage users connected to {deviceId ? `"${deviceId}"` : "your device"}.
+            Change roles (owner, operator, viewer) or deactivate users to revoke access.
           </p>
         </div>
         <Badge tone="ok">OWNER</Badge>
@@ -121,14 +116,21 @@ export default function UsersPage() {
 
       <section className="card">
         <header className="card-head">
-          <h2>Registered users</h2>
-          <Badge tone="muted">{users.length} user{users.length !== 1 ? "s" : ""}</Badge>
+          <h2>Connected users</h2>
+          {deviceId ? (
+            <Badge tone="muted">{deviceId}</Badge>
+          ) : (
+            <Badge tone="warn">NO DEVICE</Badge>
+          )}
         </header>
 
         {!loaded ? (
           <p className="hint">Loading users…</p>
         ) : users.length === 0 ? (
-          <p className="hint">No users found.</p>
+          <p className="hint">
+            No users connected to this device yet. Users will appear here after they
+            connect to the system.
+          </p>
         ) : (
           <div className="table-wrap">
             <table>
@@ -201,8 +203,8 @@ export default function UsersPage() {
         )}
 
         <p className="hint" style={{ marginTop: 14 }}>
-          Owners can change any user&apos;s role and activate/deactivate accounts.
-          You cannot modify your own role or deactivate yourself.
+          Only users connected to this device are shown. Owners can change roles and
+          activate/deactivate accounts for device access control.
         </p>
       </section>
     </>
