@@ -430,7 +430,6 @@ export default function ControlsPage() {
           </div>
 
           <p className="notice" style={{ marginTop: 14 }}>
-            Values are validated in the browser and re-validated on the ESP32. Out-of-range
             commands are rejected with a reason instead of being applied.
           </p>
         </form>
