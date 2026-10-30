@@ -102,14 +102,15 @@ export default function ConnectPage() {
             </label>
           </div>
           <div className="btn-row" style={{ marginTop: 16 }}>
-            <button className="btn btn-primary" type="submit" disabled={busy || DEMO_MODE}>
-              {busy ? "Connecting…" : "Connect"}
-            </button>
             {deviceId ? (
               <button className="btn" type="button" onClick={disconnect}>
                 Disconnect
               </button>
-            ) : null}
+            ) : (
+              <button className="btn btn-primary" type="submit" disabled={busy || DEMO_MODE}>
+                {busy ? "Connecting…" : "Connect"}
+              </button>
+            )}
           </div>
           {message ? <p className="notice" style={{ marginTop: 14 }}>{message}</p> : null}
           <p className="hint" style={{ marginTop: 14 }}>
