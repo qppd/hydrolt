@@ -104,6 +104,15 @@ export interface Profile {
   id: string;
   full_name: string | null;
   role: UserRole;
+  active: boolean;
+}
+
+export interface UserRecord {
+  uid: string;
+  email: string;
+  role: UserRole;
+  active: boolean;
+  created_at: string;
 }
 
 /** Payload published by the ESP32 to hydro/{deviceId}/telemetry */

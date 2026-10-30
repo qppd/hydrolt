@@ -83,6 +83,7 @@ export async function signUp(email: string, password: string) {
       await set(ref(d, `users/${cred.user.uid}`), {
         email,
         role: "viewer",
+        active: true,
         created_at: new Date().toISOString(),
       });
     }
@@ -114,4 +115,59 @@ export async function signOut() {
   if (!a) return;
   const { signOut: fbSignOut } = await import("firebase/auth");
   await fbSignOut(a);
+}
+
+/* --------------------------------------------------------------- user role */
+
+import type { UserRole, UserRecord } from "./types";
+
+/** Read the current user's role from /users/{uid}/role. */
+export async function getUserRole(uid: string): Promise<UserRole> {
+  const d = fbDb();
+  if (!d) return "viewer";
+  const { ref, get } = await import("firebase/database");
+  const snap = await get(ref(d, `users/${uid}/role`));
+  return snap.exists() ? (snap.val() as UserRole) : "viewer";
+}
+
+/** Read whether the current user is active. */
+export async function getUserActive(uid: string): Promise<boolean> {
+  const d = fbDb();
+  if (!d) return true;
+  const { ref, get } = await import("firebase/database");
+  const snap = await get(ref(d, `users/${uid}/active`));
+  return snap.exists() ? snap.val() === true : true;
+}
+
+/** List all users (owner only — RTDB rules must grant read on /users). */
+export async function listUsers(): Promise<UserRecord[]> {
+  const d = fbDb();
+  if (!d) return [];
+  const { ref, get } = await import("firebase/database");
+  const snap = await get(ref(d, "users"));
+  if (!snap.exists()) return [];
+  const val = snap.val() as Record<string, Record<string, unknown>>;
+  return Object.entries(val).map(([uid, v]) => ({
+    uid,
+    email: String(v.email ?? ""),
+    role: (v.role as UserRole) ?? "viewer",
+    active: v.active !== false, // default true for legacy users without the field
+    created_at: String(v.created_at ?? ""),
+  }));
+}
+
+/** Change a user's role (owner only). */
+export async function setUserRole(uid: string, role: UserRole): Promise<void> {
+  const d = fbDb();
+  if (!d) throw new Error("Not connected to database");
+  const { ref, update } = await import("firebase/database");
+  await update(ref(d, `users/${uid}`), { role });
+}
+
+/** Activate / deactivate a user (owner only). */
+export async function setUserActive(uid: string, active: boolean): Promise<void> {
+  const d = fbDb();
+  if (!d) throw new Error("Not connected to database");
+  const { ref, update } = await import("firebase/database");
+  await update(ref(d, `users/${uid}`), { active });
 }

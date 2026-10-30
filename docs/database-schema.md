@@ -116,6 +116,7 @@ users/
 └── {uid}/
     ├── email: "admin@example.com"
     ├── role: "owner"             ← "owner" | "operator" | "viewer"
+    ├── active: true              ← false = deactivated (owner-managed)
     └── created_at: "2026-10-20T08:00:00.000Z"
 ```
 
@@ -165,11 +166,15 @@ device accounts.
       }
     },
     "users": {
+      ".read": "auth != null && root.child('users').child(auth.uid).child('role').val() === 'owner'",
       "$uid": {
         ".read": "auth != null && auth.uid === $uid",
         ".write": "auth != null && auth.uid === $uid",
         "role": {
-          ".write": "auth != null && auth.uid === $uid && (!data.exists() || newData.val() === data.val())"
+          ".write": "auth != null && (auth.uid === $uid && (!data.exists() || newData.val() === data.val())) || (root.child('users').child(auth.uid).child('role').val() === 'owner')"
+        },
+        "active": {
+          ".write": "auth != null && root.child('users').child(auth.uid).child('role').val() === 'owner'"
         }
       }
     }
@@ -185,8 +190,8 @@ How this maps to the old RLS intent:
 | `settings: write operators+owners` | `settings/.write: auth != null` (role gating lives in the app; the device always needs read access to its own settings stream) |
 | `commands: create operators+owners` | `commands/$pushKey/.write: auth != null` + `.validate` requires `cmd` and `id` |
 | `alerts: resolve operators+owners` | `alerts/$pushKey/.write: auth != null` |
-| `profiles: read/update own` | `users/$uid/.read|.write: auth.uid === $uid` |
-| role escalation via service role only | `users/$uid/role/.write` refuses changes once the node exists — promote accounts from the Firebase console |
+| `profiles: read/update own` | `users/$uid/.read|.write: auth.uid === $uid`; owners can read all via `users/.read` |
+| role escalation via service role only | `users/$uid/role/.write` refuses self-changes once the node exists — owners can change any user's role; `active` writable by owners only |
 
 > **Device writes:** the firmware signs in with a dedicated Firebase Auth account
 > (email/password), so every write it performs carries `auth != null`. The rules above

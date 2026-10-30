@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/hooks/useAuth";
+import { useRole } from "@/hooks/useRole";
 import { usePairedDevice } from "@/lib/device";
 import { DEMO_MODE } from "@/lib/firebase";
 
@@ -17,6 +18,7 @@ const LINKS = [
 export default function Nav() {
   const pathname = usePathname();
   const { user, signOut } = useAuth();
+  const { isOwner } = useRole();
   const { deviceId } = usePairedDevice();
   const authed = DEMO_MODE || !!user;
 
@@ -39,6 +41,11 @@ export default function Nav() {
               </Link>
             );
           })}
+          {isOwner ? (
+            <Link href="/users" className={pathname.startsWith("/users") ? "active" : undefined}>
+              Users
+            </Link>
+          ) : null}
         </nav>
 
         <span className={`mode-chip ${DEMO_MODE ? "warn" : ""}`}>
