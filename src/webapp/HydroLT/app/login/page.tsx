@@ -1,11 +1,13 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import Badge from "@/components/Badge";
 import { useAuth } from "@/hooks/useAuth";
 import { DEMO_MODE, signIn, signOut, signUp } from "@/lib/firebase";
 
 export default function LoginPage() {
+  const router = useRouter();
   const { user } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -33,15 +35,17 @@ export default function LoginPage() {
         setMessage("Account created. Check your email to confirm, then sign in.");
         return;
       }
-      setMessage("Account created and signed in — connecting a device next…");
-      window.location.href = "/connect";
+      // New accounts are never auto-connected: send them to /connect so they
+      // must link a device ID themselves before the dashboard unlocks.
+      setMessage("Account created and signed in. Link your device on the Connect page.");
+      router.push("/connect");
       return;
     }
 
     const { error } = await signIn(emailNorm, password);
     setBusy(false);
-    setMessage(error ? error.message : "Signed in — continue to connect your device…");
-    if (!error) window.location.href = "/connect";
+    setMessage(error ? error.message : "Signed in. Opening Connect so you can link your device...");
+    if (!error) router.push("/connect");
   }
 
   const isDemo = DEMO_MODE;
