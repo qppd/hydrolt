@@ -255,11 +255,7 @@ export default function DashboardPage() {
           <span style={{ ["--c" as string]: "#ffb648" }}>Phosphorus (target 20–50)</span>
           <span style={{ ["--c" as string]: "#c792ea" }}>Potassium (target 100–200)</span>
         </div>
-        <p className="hint">
-          N/P/K are measured directly by the RS485 NPK probe — they are never derived from
-          pH or EC. Below-target readings trigger bounded automatic doses; above-target
-          readings only raise an alert.
-        </p>
+
       </section>
     </>
   );
