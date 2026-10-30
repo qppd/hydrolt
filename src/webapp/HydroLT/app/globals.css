@@ -591,6 +591,17 @@ select:focus {
   box-shadow: 0 0 0 3px rgba(53, 211, 154, 0.14);
 }
 
+input[aria-invalid="true"] {
+  border-color: var(--red, #f7768e);
+  box-shadow: 0 0 0 3px rgba(247, 118, 142, 0.14);
+}
+
+.field-error {
+  font-size: 12px;
+  color: #f7768e;
+  line-height: 1.45;
+}
+
 .interlock {
   font-size: 12px;
   color: var(--amber);

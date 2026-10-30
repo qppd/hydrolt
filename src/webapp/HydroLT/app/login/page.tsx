@@ -1,57 +1,50 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Badge from "@/components/Badge";
 import { useAuth } from "@/hooks/useAuth";
-import {
-  DEMO_MODE,
-  resendVerificationEmail,
-  signIn,
-  signOut,
-  signUp,
-} from "@/lib/firebase";
+import { DEMO_MODE, resendVerificationEmail, signIn, signOut } from "@/lib/firebase";
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function validateEmail(email: string): string | null {
+  if (!email) return "Email is required.";
+  if (!EMAIL_RE.test(email)) return "Enter a valid email address (e.g. you@example.com).";
+  return null;
+}
 
 export default function LoginPage() {
   const router = useRouter();
   const { user } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [errors, setErrors] = useState<{ email?: string; password?: string }>({});
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  async function handleAction(action: "signin" | "signup", e?: React.FormEvent) {
-    if (e) e.preventDefault();
-    const emailNorm = email.trim();
-    if (!emailNorm || !password) {
-      setMessage("Please enter both email and password.");
-      return;
-    }
-    setBusy(true);
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
     setMessage(null);
 
-    if (action === "signup") {
-      const { error, needsConfirm } = await signUp(emailNorm, password);
-      setBusy(false);
-      if (error) {
-        setMessage(error.message);
-        return;
-      }
-      if (needsConfirm) {
-        setMessage("Account created. Check your email to confirm, then sign in.");
-        return;
-      }
-      // New accounts are never auto-connected: send them to /connect so they
-      // must link a device ID themselves before the dashboard unlocks.
-      setMessage("Account created and signed in. Link your device on the Connect page.");
-      router.push("/connect");
-      return;
-    }
+    const emailNorm = email.trim();
+    const emailError = validateEmail(emailNorm);
+    const passwordError = !password ? "Password is required." : undefined;
 
+    const nextErrors = { email: emailError ?? undefined, password: passwordError };
+    setErrors(nextErrors);
+    if (emailError || passwordError) return;
+
+    setBusy(true);
     const { error } = await signIn(emailNorm, password);
     setBusy(false);
-    setMessage(error ? error.message : "Signed in. Opening Connect so you can link your device...");
-    if (!error) router.push("/connect");
+    if (error) {
+      setMessage(error.message);
+      return;
+    }
+    setMessage("Signed in. Opening Connect so you can link your device...");
+    router.push("/connect");
   }
 
   async function handleResend() {
@@ -73,6 +66,7 @@ export default function LoginPage() {
       <div className="page-head">
         <div>
           <h1>Sign in</h1>
+          <p>Access your grow system dashboard.</p>
         </div>
         <Badge tone={isDemo ? "warn" : "ok"}>
           {isDemo ? "DEMO MODE — AUTH DISABLED" : "FIREBASE AUTH"}
@@ -80,7 +74,7 @@ export default function LoginPage() {
       </div>
 
       <section className="grid grid-1">
-        <form className="card" onSubmit={(e) => handleAction("signin", e)}>
+        <form className="card" onSubmit={handleSubmit} noValidate>
           <header className="card-head">
             <h2>Account</h2>
           </header>
@@ -91,40 +85,36 @@ export default function LoginPage() {
               <input
                 type="email"
                 autoComplete="email"
-                required
                 value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                onChange={(e) => {
+                  setEmail(e.target.value);
+                  if (errors.email) setErrors((p) => ({ ...p, email: undefined }));
+                }}
                 placeholder="you@example.com"
+                aria-invalid={!!errors.email}
               />
+              {errors.email ? <span className="field-error">{errors.email}</span> : null}
             </label>
             <label className="field">
               Password
               <input
                 type="password"
                 autoComplete="current-password"
-                required
                 value={password}
-                onChange={(e) => setPassword(e.target.value)}
+                onChange={(e) => {
+                  setPassword(e.target.value);
+                  if (errors.password) setErrors((p) => ({ ...p, password: undefined }));
+                }}
                 placeholder="••••••••"
+                aria-invalid={!!errors.password}
               />
+              {errors.password ? <span className="field-error">{errors.password}</span> : null}
             </label>
           </div>
 
           <div className="btn-row" style={{ marginTop: 16 }}>
-            <button
-              className="btn btn-primary"
-              type="submit"
-              disabled={busy || isDemo}
-            >
-              {busy ? "Signing in…" : "Sign in"}
-            </button>
-            <button
-              className="btn"
-              type="button"
-              disabled={busy || isDemo}
-              onClick={() => handleAction("signup")}
-            >
-              {busy ? "Creating account…" : "Sign up"}
+            <button className="btn btn-primary" type="submit" disabled={busy || isDemo}>
+              {busy ? "Signing in..." : "Sign in"}
             </button>
             {user ? (
               <button className="btn" type="button" onClick={() => signOut()}>
@@ -143,7 +133,12 @@ export default function LoginPage() {
               </button>
             ) : null}
           </div>
+
           {message ? <p className="notice" style={{ marginTop: 14 }}>{message}</p> : null}
+
+          <p className="hint" style={{ marginTop: 14 }}>
+            Don&apos;t have an account? <Link href="/signup">Sign up</Link> instead.
+          </p>
         </form>
       </section>
     </>

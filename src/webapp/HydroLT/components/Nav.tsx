@@ -57,9 +57,14 @@ export default function Nav() {
             {user?.email ?? "demo user"}
           </span>
         ) : (
-          <Link href="/login" className="mode-chip">
-            Sign in
-          </Link>
+          <>
+            <Link href="/login" className="mode-chip">
+              Sign in
+            </Link>
+            <Link href="/signup" className="mode-chip">
+              Sign up
+            </Link>
+          </>
         )}
 
         {authed ? (
