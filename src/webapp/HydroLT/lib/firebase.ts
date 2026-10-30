@@ -1,5 +1,5 @@
 import { initializeApp, type FirebaseApp } from "firebase/app";
-import { getAuth, type Auth } from "firebase/auth";
+import { getAuth, type Auth, type User } from "firebase/auth";
 import { getDatabase, type Database } from "firebase/database";
 
 /**
@@ -64,9 +64,37 @@ export async function signIn(email: string, password: string) {
 }
 
 /**
+ * Send the email verification link to a user. Tries the app's own origin as
+ * the continue URL first; if the Firebase project hasn't allowlisted that
+ * domain yet (auth/unauthorized-continue-uri), falls back to Firebase's
+ * default action URL so the email is still delivered.
+ */
+async function sendVerificationEmail(user: User) {
+  const { sendEmailVerification } = await import("firebase/auth");
+  const url =
+    typeof window !== "undefined"
+      ? `${window.location.origin}/login`
+      : "https://hydrolyt.vercel.app/login";
+  try {
+    await sendEmailVerification(user, { url });
+  } catch (e) {
+    const code = (e as { code?: string })?.code;
+    if (code === "auth/unauthorized-continue-uri") {
+      // Domain not allowlisted in the Firebase console → use the default
+      // action URL (always allowlisted) so the email still gets delivered.
+      await sendEmailVerification(user);
+    } else {
+      throw e;
+    }
+  }
+}
+
+/**
  * Create a new account. Firebase verifies the email in most configurations,
  * so the user may need to confirm before their first sign-in — `needsConfirm`
- * reports that case.
+ * reports that case. A verification email is sent right after account
+ * creation (Firebase does NOT send one automatically from
+ * `createUserWithEmailAndPassword`).
  */
 export async function signUp(email: string, password: string) {
   const a = fbAuth();
@@ -88,9 +116,29 @@ export async function signUp(email: string, password: string) {
       });
     }
     const needsConfirm = !cred.user.emailVerified;
+    if (needsConfirm && cred.user) {
+      try {
+        await sendVerificationEmail(cred.user);
+      } catch (e) {
+        console.warn("Failed to send verification email", e);
+      }
+    }
     return { error: null, needsConfirm };
   } catch (e) {
     return { error: e instanceof Error ? e : new Error(String(e)), needsConfirm: false };
+  }
+}
+
+/** Re-send the email verification link to the signed-in user. */
+export async function resendVerificationEmail(): Promise<{ error: Error | null }> {
+  const a = fbAuth();
+  if (!a) return { error: new Error("Demo mode — authentication is disabled.") };
+  try {
+    if (!a.currentUser) return { error: new Error("You are not signed in.") };
+    await sendVerificationEmail(a.currentUser);
+    return { error: null };
+  } catch (e) {
+    return { error: e instanceof Error ? e : new Error(String(e)) };
   }
 }
 

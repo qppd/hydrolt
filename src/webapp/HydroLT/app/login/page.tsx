@@ -4,7 +4,13 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Badge from "@/components/Badge";
 import { useAuth } from "@/hooks/useAuth";
-import { DEMO_MODE, signIn, signOut, signUp } from "@/lib/firebase";
+import {
+  DEMO_MODE,
+  resendVerificationEmail,
+  signIn,
+  signOut,
+  signUp,
+} from "@/lib/firebase";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -46,6 +52,18 @@ export default function LoginPage() {
     setBusy(false);
     setMessage(error ? error.message : "Signed in. Opening Connect so you can link your device...");
     if (!error) router.push("/connect");
+  }
+
+  async function handleResend() {
+    setBusy(true);
+    setMessage(null);
+    const { error } = await resendVerificationEmail();
+    setBusy(false);
+    setMessage(
+      error
+        ? `Could not send the email: ${error.message}`
+        : "Verification email sent — check your inbox (and spam folder)."
+    );
   }
 
   const isDemo = DEMO_MODE;
@@ -111,6 +129,17 @@ export default function LoginPage() {
             {user ? (
               <button className="btn" type="button" onClick={() => signOut()}>
                 Sign out
+              </button>
+            ) : null}
+            {user ? (
+              <button
+                className="btn"
+                type="button"
+                disabled={busy}
+                onClick={handleResend}
+                title="Re-send the email verification link"
+              >
+                {busy ? "Sending..." : "Resend verification email"}
               </button>
             ) : null}
           </div>
