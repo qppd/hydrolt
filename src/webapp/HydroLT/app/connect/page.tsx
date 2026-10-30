@@ -52,7 +52,7 @@ export default function ConnectPage() {
     try {
       const d = await pair(input);
       setDevice(d);
-      setMessage(`Connected to “${d.name ?? d.id}”. Opening dashboard…`);
+      setMessage(`Connected to "${d.name ?? d.id}". Opening dashboard…`);
       setTimeout(() => router.push("/"), 900);
     } catch (err) {
       setMessage(err instanceof Error ? err.message : "Could not connect to that device.");
@@ -64,6 +64,7 @@ export default function ConnectPage() {
   function disconnect() {
     unpair();
     setDevice(null);
+    setInput(""); // Clear the input when disconnected
     setMessage("Device disconnected. Enter a device ID to connect again.");
   }
 
@@ -91,14 +92,25 @@ export default function ConnectPage() {
           <div className="form-grid" style={{ gridTemplateColumns: "1fr" }}>
             <label className="field">
               Unique device ID
-              <input
-                type="text"
-                required
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                placeholder={DEMO_MODE ? DEVICE_ID : "e.g. 3f1a…-…-…-…-…"}
-                disabled={DEMO_MODE}
-              />
+              {deviceId ? (
+                // Show readonly display when connected
+                <input
+                  type="text"
+                  value={deviceId}
+                  readOnly
+                  style={{ backgroundColor: "var(--bg-2)", color: "var(--green)", cursor: "default" }}
+                />
+              ) : (
+                // Show editable input when not connected
+                <input
+                  type="text"
+                  required
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  placeholder={DEMO_MODE ? DEVICE_ID : "e.g. 3f1a…-…-…-…-…"}
+                  disabled={DEMO_MODE}
+                />
+              )}
             </label>
           </div>
           <div className="btn-row" style={{ marginTop: 16 }}>
